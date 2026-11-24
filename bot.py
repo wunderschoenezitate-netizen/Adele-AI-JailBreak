@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ["PRIVATE_CHANNEL_ID"]
 PUBLIC_CHANNEL = os.environ.get("PUBLIC_CHANNEL_ID", "")
+PRIVATE_TOPIC_ID = int(os.environ.get("PRIVATE_TOPIC_ID", "0")) or None  # forum topic in the private group
 PRICE = int(os.environ.get("PRICE_STARS", "500"))
 CRYPTO_TOKEN = os.environ.get("CRYPTO_PAY_TOKEN", "")
 PLANS = {"30": ("5", 30), "90": ("13", 90), "365": ("48", 365)}
@@ -160,10 +161,11 @@ def handle(update, db):
         body = message.get("caption", "") if media else text
         entities_key = "caption_entities" if media else "entities"
         entities = message.get(entities_key) or []
-        target, name, cut = PUBLIC_CHANNEL, "public channel", 0
+        target, name, cut, thread = PUBLIC_CHANNEL, "public channel", 0, None
         for prefix, prefix_target, prefix_name in (("/private ", CHANNEL, "private channel"), ("/public ", PUBLIC_CHANNEL, "public channel")):
             if body.startswith(prefix):
                 target, name, cut = prefix_target, prefix_name, len(prefix)
+                thread = PRIVATE_TOPIC_ID if prefix_target == CHANNEL else None
                 break
         if not target:
             send(user, "No target channel is configured.")
@@ -174,6 +176,8 @@ def handle(update, db):
         try:
             if media:
                 params = {"chat_id": target, "from_chat_id": user, "message_id": message["message_id"]}
+                if thread:
+                    params["message_thread_id"] = thread
                 if cut:
                     params["caption"] = new_body
                     params["caption_entities"] = new_entities
@@ -182,9 +186,11 @@ def handle(update, db):
                 if not new_body:
                     send(user, "Nothing to post.")
                     return
-                api("sendMessage", chat_id=target, text=new_body, entities=new_entities)
+                api("sendMessage", chat_id=target, text=new_body, entities=new_entities,
+                    **({"message_thread_id": thread} if thread else {}))
             else:
-                api("copyMessage", chat_id=target, from_chat_id=user, message_id=message["message_id"])
+                api("copyMessage", chat_id=target, from_chat_id=user, message_id=message["message_id"],
+                    **({"message_thread_id": thread} if thread else {}))
             send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
