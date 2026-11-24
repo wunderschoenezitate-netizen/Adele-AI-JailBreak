@@ -145,6 +145,15 @@ def handle(update, db):
             send(ticket[0], "💬 Support: " + text)
             send(user, "Reply sent.")
             return
+    if user == admin_id and text and not text.startswith("/") and not message.get("reply_to_message"):
+        # Any plain text from the admin goes straight into the private channel.
+        try:
+            send(CHANNEL, text)
+            send(user, "✅ Posted to the channel.")
+        except Exception:
+            logging.exception("Channel post failed")
+            send(user, "Could not post to the channel. Check the bot's posting permissions.")
+        return
     if text == "🆘 Support" or text == "/support":
         db.execute("INSERT OR REPLACE INTO support_pending VALUES (?)", (user,))
         db.commit()
