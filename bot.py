@@ -100,6 +100,13 @@ def invite(chat):
     send(chat, "Your subscription is active. This single-use invitation expires in one hour:\n" + link)
 
 
+MEDIA_KEYS = ("photo", "document", "video", "animation", "audio", "voice", "video_note", "sticker")
+
+
+def has_media(message):
+    return any(key in message for key in MEDIA_KEYS)
+
+
 def handle(update, db):
     if "pre_checkout_query" in update:
         q = update["pre_checkout_query"]
@@ -146,19 +153,31 @@ def handle(update, db):
             send(ticket[0], "💬 Support: " + text)
             send(user, "Reply sent.")
             return
-    if user == admin_id and text and not text.startswith("/") and not message.get("reply_to_message"):
-        # Plain text goes to the private channel. Start with "/public " to post to the public channel.
-        target, content, name = CHANNEL, text, "private channel"
-        if text.startswith("/public "):
-            if not PUBLIC_CHANNEL:
-                send(user, "No public channel is configured (PUBLIC_CHANNEL_ID).")
-                return
-            target, content, name = PUBLIC_CHANNEL, text[len("/public "):].strip(), "public channel"
-        if not content:
-            send(user, "Nothing to post.")
+    is_post_command = text.startswith("/") and not text.startswith(("/public ", "/private "))
+    if user == admin_id and not message.get("reply_to_message") and not is_post_command and (text or has_media(message)):
+        # Default target is the public jailbreak channel. Start a text or caption with "/private " for the private channel.
+        caption = message.get("caption") or text or ""
+        target, name = PUBLIC_CHANNEL, "public channel"
+        if caption.startswith("/private "):
+            target, name, caption = CHANNEL, "private channel", caption[len("/private "):].strip()
+        elif caption.startswith("/public "):
+            caption = caption[len("/public "):].strip()
+        if not target:
+            send(user, "No target channel is configured.")
             return
         try:
-            send(target, content)
+            if has_media(message):
+                params = {"chat_id": target, "from_chat_id": user, "message_id": message["message_id"]}
+                if caption:
+                    params["caption"] = caption
+                else:
+                    params.pop("caption", None)
+                api("copyMessage", **params)
+            else:
+                if not caption:
+                    send(user, "Nothing to post.")
+                    return
+                send(target, caption)
             send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
