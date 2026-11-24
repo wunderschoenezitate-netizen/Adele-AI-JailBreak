@@ -1,7 +1,9 @@
 import logging
 import os
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -231,10 +233,38 @@ def check_crypto_payments(db):
             logging.exception("Could not send invite for invoice %s; user can use My status", invoice_id)
 
 
+def connect():
+    # One connection per thread. WAL lets the background checks and the handlers write without blocking each other.
+    db = sqlite3.connect(DB, timeout=10)
+    db.execute("PRAGMA journal_mode=WAL")
+    return db
+
+
+def background(interval=30):
+    db = connect()
+    while True:
+        try:
+            expire_members(db)
+            check_crypto_payments(db)
+        except Exception:
+            logging.exception("Background check failed")
+        time.sleep(interval)
+
+
+def process(update):
+    db = connect()
+    try:
+        handle(update, db)
+    except Exception:
+        logging.exception("Update %s failed", update.get("update_id"))
+    finally:
+        db.close()
+
+
 def main():
     if PRICE < 1:
         raise ValueError("PRICE_STARS must be positive")
-    db = sqlite3.connect(DB)
+    db = connect()
     db.execute("CREATE TABLE IF NOT EXISTS subscriptions (user_id INTEGER PRIMARY KEY, expires INTEGER NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, referrer_id INTEGER)")
     db.execute("CREATE TABLE IF NOT EXISTS crypto_invoices (invoice_id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, days INTEGER NOT NULL, amount TEXT NOT NULL, credited INTEGER NOT NULL DEFAULT 0)")
@@ -254,19 +284,13 @@ def main():
         except Exception:
             logging.exception("Bot startup failed; retrying")
             time.sleep(5)
+    threading.Thread(target=background, daemon=True).start()
+    pool = ThreadPoolExecutor(max_workers=8)
     offset = 0
     while True:
         try:
-            expire_members(db)
-            try:
-                check_crypto_payments(db)
-            except Exception:
-                logging.exception("Crypto payment check failed")
             for update in api("getUpdates", offset=offset, timeout=25, allowed_updates=["message", "callback_query", "pre_checkout_query"]):
-                try:
-                    handle(update, db)
-                except Exception:
-                    logging.exception("Update %s failed", update["update_id"])
+                pool.submit(process, update)
                 offset = update["update_id"] + 1
         except Exception:
             logging.exception("Polling failed")
