@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ["PRIVATE_CHANNEL_ID"]
+PUBLIC_CHANNEL = os.environ.get("PUBLIC_CHANNEL_ID", "")
 PRICE = int(os.environ.get("PRICE_STARS", "500"))
 CRYPTO_TOKEN = os.environ.get("CRYPTO_PAY_TOKEN", "")
 PLANS = {"30": ("5", 30), "90": ("13", 90), "365": ("48", 365)}
@@ -146,13 +147,22 @@ def handle(update, db):
             send(user, "Reply sent.")
             return
     if user == admin_id and text and not text.startswith("/") and not message.get("reply_to_message"):
-        # Any plain text from the admin goes straight into the private channel.
+        # Plain text goes to the private channel. Start with "/public " to post to the public channel.
+        target, content, name = CHANNEL, text, "private channel"
+        if text.startswith("/public "):
+            if not PUBLIC_CHANNEL:
+                send(user, "No public channel is configured (PUBLIC_CHANNEL_ID).")
+                return
+            target, content, name = PUBLIC_CHANNEL, text[len("/public "):].strip(), "public channel"
+        if not content:
+            send(user, "Nothing to post.")
+            return
         try:
-            send(CHANNEL, text)
-            send(user, "✅ Posted to the channel.")
+            send(target, content)
+            send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
-            send(user, "Could not post to the channel. Check the bot's posting permissions.")
+            send(user, f"Could not post to the {name}. Check the bot's posting permissions.")
         return
     if text == "🆘 Support" or text == "/support":
         db.execute("INSERT OR REPLACE INTO support_pending VALUES (?)", (user,))
