@@ -156,28 +156,35 @@ def handle(update, db):
     is_post_command = text.startswith("/") and not text.startswith(("/public ", "/private "))
     if user == admin_id and not message.get("reply_to_message") and not is_post_command and (text or has_media(message)):
         # Default target is the public jailbreak channel. Start a text or caption with "/private " for the private channel.
-        caption = message.get("caption") or text or ""
-        target, name = PUBLIC_CHANNEL, "public channel"
-        if caption.startswith("/private "):
-            target, name, caption = CHANNEL, "private channel", caption[len("/private "):].strip()
-        elif caption.startswith("/public "):
-            caption = caption[len("/public "):].strip()
+        media = has_media(message)
+        body = message.get("caption", "") if media else text
+        entities_key = "caption_entities" if media else "entities"
+        entities = message.get(entities_key) or []
+        target, name, cut = PUBLIC_CHANNEL, "public channel", 0
+        for prefix, prefix_target, prefix_name in (("/private ", CHANNEL, "private channel"), ("/public ", PUBLIC_CHANNEL, "public channel")):
+            if body.startswith(prefix):
+                target, name, cut = prefix_target, prefix_name, len(prefix)
+                break
         if not target:
             send(user, "No target channel is configured.")
             return
+        new_body = body[cut:]
+        # Shift formatting entities so bold, links, etc. survive the prefix removal.
+        new_entities = [{**e, "offset": e["offset"] - cut} for e in entities if e["offset"] >= cut] if cut else entities
         try:
-            if has_media(message):
+            if media:
                 params = {"chat_id": target, "from_chat_id": user, "message_id": message["message_id"]}
-                if caption:
-                    params["caption"] = caption
-                else:
-                    params.pop("caption", None)
+                if cut:
+                    params["caption"] = new_body
+                    params["caption_entities"] = new_entities
                 api("copyMessage", **params)
-            else:
-                if not caption:
+            elif cut:
+                if not new_body:
                     send(user, "Nothing to post.")
                     return
-                send(target, caption)
+                api("sendMessage", chat_id=target, text=new_body, entities=new_entities)
+            else:
+                api("copyMessage", chat_id=target, from_chat_id=user, message_id=message["message_id"])
             send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
