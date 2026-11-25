@@ -182,9 +182,9 @@ async def on_ready():
     if os.environ.get("POST_BUY"):
         channel = client.get_channel(SALES_CHANNEL_ID) or await client.fetch_channel(SALES_CHANNEL_ID)
         banner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banner.png")
-        description = '<:yellowdiamond:1575214964996571216> **Our PRIVATE is already packed with top AI unlocks:**\n\n<:telegram:1575215307180482694> **Adele PRIVATE UNLOCKS:**\n\n> <:wl:1575215598064107663> GPT 6.2 / Sol / 6 / 5.6\n> Gemini 4 (Neon / Argon / Carbon)\n> Claude Opus / Sonnet / Fable 5.5\n> Grok 4.7\n> DeepSeek V4.1\n> Qwen 4 / Kimi k3.1 / GLM 5.3\n> + many more inside!\n\n**<:telegram:1575215307180482694> Main channel: https://t.me/adeleaijb\n\n👇 Get access:**'
+        description = '<:yellowdiamond:1575214964996571216> **Our PRIVATE is already packed with top AI unlocks:**\n\n<:telegram:1575215307180482694> **Adele PRIVATE UNLOCKS:**\n\n> GPT 6.2 / Sol / 6 / 5.6\n> Gemini 4 (Neon / Argon / Carbon)\n> Claude Opus / Sonnet / Fable 5.5\n> Grok 4.7\n> DeepSeek V4.1\n> Qwen 4 / Kimi k3.1 / GLM 5.3\n> + many more inside!\n\n**<:telegram:1575215307180482694> Main channel: https://t.me/adeleaijb\n\n👇 Get access:**'
         embed = discord.Embed(
-            title="<:ChatGPTImage17jun202610_26_24:1516720785253863554> AdeleAI Private <:ChatGPTImage17jun202610_26_24:1516720785253863554>",
+            title="<:wl:1575215598064107663> AdeleAI Private <:wl:1575215598064107663>",
             description=description,
             color=0xFFC93C)
         embed.set_image(url="attachment://banner.png")
