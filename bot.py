@@ -112,46 +112,59 @@ def has_media(message):
     return any(key in message for key in MEDIA_KEYS)
 
 
+def discord_escape(chunk):
+    # Only escape characters Discord would otherwise turn into formatting.
+    return re.sub(r"([\*_~`|])", r"\\1", chunk)
+
+
+def discord_render(chunk, depth):
+    text = chunk if (depth["code"] or depth["raw"]) else discord_escape(chunk)
+    if depth["quote"]:
+        text = text.replace("\n", "\n> ")
+    return text
+
+
 def telegram_to_discord_md(text, entities):
     """Convert Telegram text + entities (UTF-16 offsets) to Discord markdown."""
     units = text.encode("utf-16-le")
+    total = len(units) // 2
 
     def slice_units(a, b):
         return units[a * 2:b * 2].decode("utf-16-le")
 
-    def esc(chunk):
-        # Only escape characters Discord would otherwise turn into formatting.
-        return re.sub(r"([\\*_~`|])", r"\\\1", chunk)
-
-    markers = {"bold": ("**", "**"), "italic": ("*", "*"), "underline": ("__", "__"),
-               "strikethrough": ("~~", "~~"), "spoiler": ("||", "||"), "code": ("`", "`"),
-               "pre": ("```\n", "\n```")}
-    events = []  # (pos, rank, sort_key, open_or_close_marker, code_flag)
+    simple = {"bold": ("**", "**"), "italic": ("*", "*"), "underline": ("__", "__"),
+              "strikethrough": ("~~", "~~"), "spoiler": ("||", "||")}
+    events = []  # (pos, rank, sort_key, open_marker, close_marker, mode)
     for e in entities or []:
         start, end = e["offset"], e["offset"] + e["length"]
-        if e["type"] == "text_link":
-            open_m, close_m = "[", f"]({e['url']})"
-        elif e["type"] == "mention":
-            # Telegram @username -> clickable Telegram link (Discord does not link it by itself)
+        kind = e["type"]
+        if kind == "text_link":
+            o, c, mode = "[", f"]({e['url']})", None
+        elif kind == "mention":
             handle = slice_units(start, end).lstrip("@")
-            open_m, close_m = "[", f"](https://t.me/{handle})"
-        elif e["type"] in markers:
-            open_m, close_m = markers[e["type"]]
+            o, c, mode = "[", f"](https://t.me/{handle})", "raw"
+        elif kind in simple:
+            (o, c), mode = simple[kind], None
+        elif kind == "code":
+            o, c, mode = "`", "`", "code"
+        elif kind == "pre":
+            o, c, mode = "```\n", "\n```", "code"
+        elif kind in ("blockquote", "expandable_blockquote"):
+            o, c, mode = "> ", "", "quote"
         else:
             continue
-        code = 1 if e["type"] in ("code", "pre") else 0
-        events.append((start, 1, -end, open_m, code))    # opens: outer first
-        events.append((end, 0, -start, close_m, -code))  # closes: inner first
-    out, cursor, in_code = [], 0, False
-    for pos, _, _, marker, code in sorted(events, key=lambda ev: (ev[0], ev[1], ev[2])):
-        chunk = slice_units(cursor, pos)
-        out.append(chunk if in_code else esc(chunk))
+        events.append((start, 1, -end, o, mode, True))
+        events.append((end, 0, -start, c, mode, False))
+
+    out, cursor = [], 0
+    depth = {"code": 0, "raw": 0, "quote": 0}
+    for pos, _, _, marker, mode, opening in sorted(events, key=lambda ev: (ev[0], ev[1], ev[2])):
+        out.append(discord_render(slice_units(cursor, pos), depth))
         out.append(marker)
         cursor = pos
-        if code:
-            in_code = code > 0
-    tail = slice_units(cursor, len(units) // 2)
-    out.append(tail if in_code else esc(tail))
+        if mode:
+            depth[mode] += 1 if opening else -1
+    out.append(discord_render(slice_units(cursor, total), depth))
     return "".join(out)
 
 
