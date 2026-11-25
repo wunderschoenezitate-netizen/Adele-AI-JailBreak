@@ -120,7 +120,8 @@ def telegram_to_discord_md(text, entities):
         return units[a * 2:b * 2].decode("utf-16-le")
 
     def esc(chunk):
-        return re.sub(r"([\\*_~`|\[\]()])", r"\\\1", chunk)
+        # Only escape characters Discord would otherwise turn into formatting.
+        return re.sub(r"([\\*_~`|])", r"\\\1", chunk)
 
     markers = {"bold": ("**", "**"), "italic": ("*", "*"), "underline": ("__", "__"),
                "strikethrough": ("~~", "~~"), "spoiler": ("||", "||"), "code": ("`", "`"),
