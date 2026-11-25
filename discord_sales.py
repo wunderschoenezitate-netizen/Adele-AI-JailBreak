@@ -182,20 +182,9 @@ async def on_ready():
     if os.environ.get("POST_BUY"):
         channel = client.get_channel(SALES_CHANNEL_ID) or await client.fetch_channel(SALES_CHANNEL_ID)
         banner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banner.png")
-        description = "\n".join([
-            "Private access to the top AI unlocks: GPT, Gemini, Claude, Grok, DeepSeek, Qwen and more.",
-            "",
-            "**Plans**",
-            "• 30 days — €5",
-            "• 90 days — €13",
-            "• 365 days — €48",
-            "",
-            "**Pay with** <:ltc:1524757802264952862> **Litecoin (LTC) only**",
-            "",
-            "Press **💳 Buy access** below to get your invoice.",
-        ])
+        description = '<:0000:1458289609887973387> **Our PRIVATE is already packed with top AI unlocks:**\n\n<:kairo_tg:1509115803092389949> **Adele PRIVATE UNLOCKS:**\n\n> GPT 6.2 / Sol / 6 / 5.6\n> Gemini 4 (Neon / Argon / Carbon)\n> Claude Opus / Sonnet / Fable 5.5\n> Grok 4.7\n> DeepSeek V4.1\n> Qwen 4 / Kimi k3.1 / GLM 5.3\n> + many more inside!\n\n**<:kairo_tg:1509115803092389949> Main channel: https://t.me/adeleaijb\n\n👇 Get access:**'
         embed = discord.Embed(
-            title="<:ltc:1524757802264952862> AdeleAI Private",
+            title="<:ChatGPTImage17jun202610_26_24:1516720785253863554> AdeleAI Private <:ChatGPTImage17jun202610_26_24:1516720785253863554>",
             description=description,
             color=0xFFC93C)
         embed.set_image(url="attachment://banner.png")
