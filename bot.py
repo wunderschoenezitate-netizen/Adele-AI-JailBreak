@@ -332,11 +332,6 @@ def handle(update, db):
                     **({"message_thread_id": thread} if thread else {}))
             db.execute("DELETE FROM admin_post_mode WHERE user_id=?", (user,))
             db.commit()
-            if target == PUBLIC_CHANNEL:
-                try:
-                    mirror_to_discord(new_body, new_entities, message if media else None)
-                except Exception:
-                    logging.exception("Discord mirror failed")
             send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
