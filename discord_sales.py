@@ -181,13 +181,16 @@ async def on_ready():
     log.info("logged in as %s", client.user)
     if os.environ.get("POST_BUY"):
         channel = client.get_channel(SALES_CHANNEL_ID) or await client.fetch_channel(SALES_CHANNEL_ID)
-        await channel.send(
-            "🔓 **AdeleAI Private**\n"
-            "Access to the private group with top AI unlocks.\n\n"
-            "**Plans:** 30 days €5 · 90 days €13 · 365 days €48\n"
-            "**Pay:** Litecoin (LTC) only\n\n"
-            "Press the button below to get your invoice.",
-            view=BuyView())
+        banner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banner.png")
+        embed = discord.Embed(
+            title="🔓 AdeleAI Private",
+            description=("Access to the private group with top AI unlocks." + '\\n\\n' +
+                         "**Plans:** 30 days €5 · 90 days €13 · 365 days €48" + '\\n' +
+                         "**Pay:** Litecoin (LTC) only" + '\\n\\n' +
+                         "Press the button below to get your invoice."),
+            color=0xFFC93C)
+        embed.set_image(url="attachment://banner.png")
+        await channel.send(embed=embed, file=discord.File(banner, filename="banner.png"), view=BuyView())
         log.info("buy message posted")
         await client.close()
         return
