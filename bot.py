@@ -1,8 +1,10 @@
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +16,8 @@ TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ["PRIVATE_CHANNEL_ID"]
 PUBLIC_CHANNEL = os.environ.get("PUBLIC_CHANNEL_ID", "")
 PRIVATE_TOPIC_ID = int(os.environ.get("PRIVATE_TOPIC_ID", "0")) or None  # forum topic in the private group
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")  # public posts are mirrored here
+DISCORD_UA = "AdeleAIBot/1.0"
 PRICE = int(os.environ.get("PRICE_STARS", "500"))
 CRYPTO_TOKEN = os.environ.get("CRYPTO_PAY_TOKEN", "")
 PLANS = {"30": ("5", 30), "90": ("13", 90), "365": ("48", 365)}
@@ -108,6 +112,86 @@ def has_media(message):
     return any(key in message for key in MEDIA_KEYS)
 
 
+def telegram_to_discord_md(text, entities):
+    """Convert Telegram text + entities (UTF-16 offsets) to Discord markdown."""
+    units = text.encode("utf-16-le")
+
+    def slice_units(a, b):
+        return units[a * 2:b * 2].decode("utf-16-le")
+
+    def esc(chunk):
+        return re.sub(r"([\\*_~`|\[\]()])", r"\\\1", chunk)
+
+    markers = {"bold": ("**", "**"), "italic": ("*", "*"), "underline": ("__", "__"),
+               "strikethrough": ("~~", "~~"), "spoiler": ("||", "||"), "code": ("`", "`"),
+               "pre": ("```\n", "\n```")}
+    events = []  # (pos, rank, sort_key, open_or_close_marker, code_flag)
+    for e in entities or []:
+        start, end = e["offset"], e["offset"] + e["length"]
+        if e["type"] == "text_link":
+            open_m, close_m = "[", f"]({e['url']})"
+        elif e["type"] in markers:
+            open_m, close_m = markers[e["type"]]
+        else:
+            continue
+        code = 1 if e["type"] in ("code", "pre") else 0
+        events.append((start, 1, -end, open_m, code))    # opens: outer first
+        events.append((end, 0, -start, close_m, -code))  # closes: inner first
+    out, cursor, in_code = [], 0, False
+    for pos, _, _, marker, code in sorted(events, key=lambda ev: (ev[0], ev[1], ev[2])):
+        chunk = slice_units(cursor, pos)
+        out.append(chunk if in_code else esc(chunk))
+        out.append(marker)
+        cursor = pos
+        if code:
+            in_code = code > 0
+    tail = slice_units(cursor, len(units) // 2)
+    out.append(tail if in_code else esc(tail))
+    return "".join(out)
+
+
+def discord_post(body, content_type):
+    req = Request(DISCORD_WEBHOOK, data=body, headers={"Content-Type": content_type, "User-Agent": DISCORD_UA})
+    with urlopen(req, timeout=30) as response:
+        response.read()
+
+
+def media_info(message):
+    for key in MEDIA_KEYS:
+        if key in message:
+            item = message[key][-1] if key == "photo" else message[key]
+            name = item.get("file_name") or ("photo.jpg" if key == "photo" else f"{key}")
+            return item["file_id"], name, item.get("file_size")
+    return None
+
+
+def mirror_to_discord(body_text, entities, media_message=None):
+    if not DISCORD_WEBHOOK:
+        return
+    md = telegram_to_discord_md(body_text or "", entities or [])[:4000]
+    payload = {"username": "Adele AI"}
+    if md:
+        payload["embeds"] = [{"description": md, "color": 0x0EA5E9}]
+    info = media_info(media_message) if media_message else None
+    if info is None or (info[2] or 0) > 9_000_000:
+        if "embeds" in payload:
+            discord_post(json.dumps(payload).encode("utf-8"), "application/json")
+        return
+    file_id, filename, _ = info
+    file_path = api("getFile", file_id=file_id)["file_path"]
+    with urlopen(f"https://api.telegram.org/file/bot{TOKEN}/{file_path}", timeout=60) as response:
+        data = response.read()
+    boundary = uuid.uuid4().hex
+    body = b"".join([
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\n"
+        f"Content-Type: application/json\r\n\r\n{json.dumps(payload)}\r\n".encode("utf-8"),
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"{filename}\"\r\n"
+        f"Content-Type: application/octet-stream\r\n\r\n".encode("utf-8"),
+        data, b"\r\n", f"--{boundary}--\r\n".encode("utf-8"),
+    ])
+    discord_post(body, f"multipart/form-data; boundary={boundary}")
+
+
 def handle(update, db):
     if "pre_checkout_query" in update:
         q = update["pre_checkout_query"]
@@ -154,8 +238,14 @@ def handle(update, db):
             send(ticket[0], "💬 Support: " + text)
             send(user, "Reply sent.")
             return
+    if user == admin_id and text == "/open":
+        db.execute("INSERT OR REPLACE INTO admin_post_mode VALUES (?)", (user,))
+        db.commit()
+        send(user, "📝 Post mode on. Your next message (text, photo or file) goes to the public channel and Discord. /cancel to stop.")
+        return
     is_post_command = text.startswith("/") and not text.startswith(("/public ", "/private "))
-    if user == admin_id and not message.get("reply_to_message") and not is_post_command and (text or has_media(message)):
+    in_post_mode = db.execute("SELECT 1 FROM admin_post_mode WHERE user_id=?", (user,)).fetchone()
+    if user == admin_id and in_post_mode and not message.get("reply_to_message") and not is_post_command and (text or has_media(message)):
         # Default target is the public jailbreak channel. Start a text or caption with "/private " for the private channel.
         media = has_media(message)
         body = message.get("caption", "") if media else text
@@ -191,6 +281,13 @@ def handle(update, db):
             else:
                 api("copyMessage", chat_id=target, from_chat_id=user, message_id=message["message_id"],
                     **({"message_thread_id": thread} if thread else {}))
+            db.execute("DELETE FROM admin_post_mode WHERE user_id=?", (user,))
+            db.commit()
+            if target == PUBLIC_CHANNEL:
+                try:
+                    mirror_to_discord(new_body, new_entities, message if media else None)
+                except Exception:
+                    logging.exception("Discord mirror failed")
             send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
@@ -203,6 +300,7 @@ def handle(update, db):
         return
     if text == "/cancel":
         db.execute("DELETE FROM support_pending WHERE user_id=?", (user,))
+        db.execute("DELETE FROM admin_post_mode WHERE user_id=?", (user,))
         db.commit()
         send(user, "Cancelled.")
         return
@@ -322,6 +420,7 @@ def main():
     db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS support_pending (user_id INTEGER PRIMARY KEY)")
     db.execute("CREATE TABLE IF NOT EXISTS support_messages (message_id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS admin_post_mode (user_id INTEGER PRIMARY KEY)")
     db.commit()
     while True:
         try:
