@@ -130,6 +130,10 @@ def telegram_to_discord_md(text, entities):
         start, end = e["offset"], e["offset"] + e["length"]
         if e["type"] == "text_link":
             open_m, close_m = "[", f"]({e['url']})"
+        elif e["type"] == "mention":
+            # Telegram @username -> clickable Telegram link (Discord does not link it by itself)
+            handle = slice_units(start, end).lstrip("@")
+            open_m, close_m = "[", f"](https://t.me/{handle})"
         elif e["type"] in markers:
             open_m, close_m = markers[e["type"]]
         else:
