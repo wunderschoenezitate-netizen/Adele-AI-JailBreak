@@ -73,7 +73,7 @@ def action(name, user, db):
                                 [{"text": "365 days · €48", "callback_data": "plan_365"}]]})
     elif name.startswith("plan_") and name[5:] in PLANS:
         if not CRYPTO_TOKEN:
-            send(user, "Crypto payments are being set up. Please contact @Lunafromadele.")
+            send(user, "Crypto payments are being set up. Please tap 🆘 Support to open a ticket.")
             return
         price, days = PLANS[name[5:]]
         invoice = crypto_api("createInvoice", currency_type="fiat", fiat="EUR", amount=price,
@@ -96,7 +96,7 @@ def action(name, user, db):
         username = api("getMe")["username"]
         send(user, f"Your referral link:\nhttps://t.me/{username}?start=ref_{user}\n\nPeople joined through your link: {count}")
     elif name == "info":
-        send(user, "AdeleAI Private gives subscribers access to the private group.\n\nPlans: 30 days €5, 90 days €13, 365 days €48. Crypto plans require a new payment to renew.\n\nPayment support: @Lunafromadele")
+        send(user, "AdeleAI Private gives subscribers access to the private group.\n\nPlans: 30 days €5, 90 days €13, 365 days €48. Crypto plans require a new payment to renew.\n\nPayment support: tap 🆘 Support in the menu to open a ticket.")
 
 
 def invite(chat):
@@ -324,7 +324,7 @@ def handle(update, db):
         return
     if db.execute("SELECT 1 FROM support_pending WHERE user_id=?", (user,)).fetchone() and text:
         if not admin_id:
-            send(user, "Support is currently unavailable. Contact @Lunafromadele.")
+            send(user, "Support is currently unavailable. Please try again later.")
             return
         result = api("sendMessage", chat_id=admin_id, text=f"Support request from user {user}:\n\n{text}\n\nReply to this message to respond.")
         db.execute("INSERT INTO support_messages VALUES (?, ?)", (result["message_id"], user))
@@ -352,7 +352,7 @@ def handle(update, db):
         db.commit()
         menu(user)
     elif message.get("text", "").split(" ")[0].split("@")[0] == "/paysupport":
-        send(user, "For payment support, contact @Lunafromadele.")
+        send(user, "For payment support, tap 🆘 Support in the menu to open a ticket.")
     else:
         choices = {"💳 Subscription": "buy", "📊 My status": "status", "🔗 Referral link": "referral", "📋 Information": "info"}
         selected = choices.get(message.get("text"))
