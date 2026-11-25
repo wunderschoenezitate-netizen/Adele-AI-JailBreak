@@ -210,6 +210,28 @@ def mirror_to_discord(body_text, entities, media_message=None):
     discord_post(body, f"multipart/form-data; boundary={boundary}")
 
 
+KEY_RE = re.compile(r"ADL-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}")
+
+
+def redeem_key(user, key, db):
+    """Return an error message, or None when the key was accepted."""
+    row = db.execute("SELECT days, used_by FROM keys WHERE key=?", (key,)).fetchone()
+    if not row:
+        return "❌ Key not found. Check the key and try again."
+    if row[1] is not None:
+        return "❌ This key was already used."
+    now = int(time.time())
+    with db:
+        cur = db.execute("UPDATE keys SET used_by=?, used_at=? WHERE key=? AND used_by IS NULL", (user, now, key))
+        if cur.rowcount != 1:
+            return "❌ This key was already used."
+        existing = db.execute("SELECT expires FROM subscriptions WHERE user_id=?", (user,)).fetchone()
+        expires = max(now, existing[0] if existing else 0) + row[0] * 86400
+        db.execute("INSERT INTO subscriptions VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET expires=excluded.expires",
+                   (user, expires))
+    return None
+
+
 def handle(update, db):
     if "pre_checkout_query" in update:
         q = update["pre_checkout_query"]
@@ -256,6 +278,15 @@ def handle(update, db):
             send(ticket[0], "💬 Support: " + text)
             send(user, "Reply sent.")
             return
+    key_candidate = text.strip().upper()
+    if KEY_RE.fullmatch(key_candidate):
+        error = redeem_key(user, key_candidate, db)
+        if error:
+            send(user, error)
+        else:
+            send(user, "✅ Key accepted. Your access is active.")
+            invite(user)
+        return
     if user == admin_id and text == "/open":
         db.execute("INSERT OR REPLACE INTO admin_post_mode VALUES (?)", (user,))
         db.commit()
@@ -439,6 +470,7 @@ def main():
     db.execute("CREATE TABLE IF NOT EXISTS support_pending (user_id INTEGER PRIMARY KEY)")
     db.execute("CREATE TABLE IF NOT EXISTS support_messages (message_id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS admin_post_mode (user_id INTEGER PRIMARY KEY)")
+    db.execute("CREATE TABLE IF NOT EXISTS keys (key TEXT PRIMARY KEY, days INTEGER NOT NULL, order_id TEXT, used_by INTEGER, used_at INTEGER)")
     db.commit()
     while True:
         try:
