@@ -190,7 +190,7 @@ async def on_ready():
             "• 90 days — €13",
             "• 365 days — €48",
             "",
-            "**Pay with Litecoin (LTC) only**",
+            "**Pay with** <:ltc:1524757802264952862> **Litecoin (LTC) only**",
             "",
             "Press **💳 Buy access** below to get your invoice.",
         ])
