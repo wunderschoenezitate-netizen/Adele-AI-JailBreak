@@ -203,7 +203,7 @@ async def on_ready():
         log.info("buy message posted")
         await client.close()
         return
-    await client.change_presence(activity=discord.Game(name="🔓 Jailbreaking top AI models"))
+    await client.change_presence(activity=discord.CustomActivity(name="🔓 AI jailbreaking"))
     client.loop.create_task(settle_orders(client))
 
 
