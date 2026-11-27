@@ -9,7 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import http.client
 import json
+import socket
 from urllib.request import Request, urlopen
 
 TOKEN = os.environ["BOT_TOKEN"]
@@ -21,16 +23,46 @@ DISCORD_UA = "AdeleAIBot/1.0"
 PRICE = int(os.environ.get("PRICE_STARS", "500"))
 CRYPTO_TOKEN = os.environ.get("CRYPTO_PAY_TOKEN", "")
 PLANS = {"30": ("5", 30), "90": ("13", 90), "365": ("48", 365)}
-API = f"https://api.telegram.org/bot{TOKEN}/"
 DB = os.environ.get("DATABASE_PATH", "adeleai.sqlite3")
 logging.basicConfig(level=logging.INFO)
 
 
+if os.environ.get("FORCE_IPV4", "1") != "0":
+    # Python tries every resolved address in turn with the full timeout, so one blackholed IPv6 route costs 20-40 s.
+    _getaddrinfo = socket.getaddrinfo
+    socket.getaddrinfo = lambda host, port, family=0, *args, **kwargs: _getaddrinfo(host, port, socket.AF_INET, *args, **kwargs)
+
+SLOW_CALL_SECONDS = 2.0
+_local = threading.local()
+
+
 def api(method, **data):
-    request = Request(API + method, data=json.dumps(data).encode("utf-8"),
-                      headers={"Content-Type": "application/json"})
-    with urlopen(request, timeout=40) as response:
-        result = json.load(response)
+    # One kept-alive HTTPS connection per thread: no TLS handshake per call.
+    body = json.dumps(data).encode("utf-8")
+    timeout = data.get("timeout", 0) + 10 if method == "getUpdates" else 20
+    started = time.monotonic()
+    for attempt in (0, 1):
+        conn = getattr(_local, "conn", None)
+        reused = conn is not None
+        if conn is None:
+            conn = _local.conn = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+        elif conn.sock:
+            conn.sock.settimeout(timeout)
+        try:
+            conn.request("POST", f"/bot{TOKEN}/{method}", body, {"Content-Type": "application/json"})
+            raw = conn.getresponse().read()
+            break
+        except Exception as exc:
+            conn.close()
+            _local.conn = None
+            # A connection the server closed while idle fails immediately; retry once on a fresh one.
+            if reused and attempt == 0 and isinstance(exc, ConnectionError):
+                continue
+            raise
+    elapsed = time.monotonic() - started
+    if elapsed > SLOW_CALL_SECONDS and method != "getUpdates":
+        logging.warning("Slow Telegram call %s: %.1f s", method, elapsed)
+    result = json.loads(raw)
     if not result.get("ok"):
         raise RuntimeError(f"{method}: {result}")
     return result.get("result")
@@ -248,6 +280,13 @@ def handle(update, db):
         action(q["data"], user, db)
         return
     message = update.get("message", {})
+    if message.get("new_chat_members") and str(message.get("chat", {}).get("id")) == str(CHANNEL):
+        # Telegram's "X joined the group" service message in the private group.
+        try:
+            api("deleteMessage", chat_id=message["chat"]["id"], message_id=message["message_id"])
+        except Exception:
+            logging.exception("Could not delete join message %s", message.get("message_id"))
+        return
     if message.get("chat", {}).get("type") != "private":
         return
     user = message["from"]["id"]
