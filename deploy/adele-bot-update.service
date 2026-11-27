@@ -1,8 +1,0 @@
-[Unit]
-Description=Pull the AdeleAI bot from GitHub and restart it on change
-
-[Service]
-Type=oneshot
-Environment=APP_DIR=/opt/adele-bot
-Environment=SERVICE=adele-bot
-ExecStart=/opt/adele-bot/deploy/update.sh

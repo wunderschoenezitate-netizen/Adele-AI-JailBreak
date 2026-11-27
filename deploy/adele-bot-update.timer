@@ -1,9 +1,0 @@
-[Unit]
-Description=Check GitHub for a new AdeleAI bot version every minute
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
-
-[Install]
-WantedBy=timers.target
