@@ -248,6 +248,13 @@ def handle(update, db):
         action(q["data"], user, db)
         return
     message = update.get("message", {})
+    if message.get("new_chat_members") and str(message.get("chat", {}).get("id")) == str(CHANNEL):
+        # Telegram's "X joined the group" service message in the private group.
+        try:
+            api("deleteMessage", chat_id=message["chat"]["id"], message_id=message["message_id"])
+        except Exception:
+            logging.exception("Could not delete join message %s", message.get("message_id"))
+        return
     if message.get("chat", {}).get("type") != "private":
         return
     user = message["from"]["id"]
