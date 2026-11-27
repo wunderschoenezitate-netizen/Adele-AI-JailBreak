@@ -88,7 +88,7 @@ def crypto_api(method, **data):
 
 
 def menu(chat):
-    send(chat, "AdeleAI Private 🔒 — everything you need to use AI without limits.\n\nInside:\n🔓 Jailbreaks for all top models\n🆓 Ways to get free access to paid AI\n⚡ Working prompts and workflows\n📢 Everything before anyone else\n\nChoose an action 👇", {
+    send(chat, "DdeleAI Private 🔒 — everything you need to use AI without limits.\n\nInside:\n🔓 Jailbreaks for all top models\n🆓 Ways to get free access to paid AI\n⚡ Working prompts and workflows\n📢 Everything before anyone else\n\nChoose an action 👇", {
         "keyboard": [[{"text": "💳 Subscription"}, {"text": "📊 My status"}],
                      [{"text": "🔗 Referral link"}, {"text": "📋 Information"}],
                      [{"text": "🆘 Support"}]],
