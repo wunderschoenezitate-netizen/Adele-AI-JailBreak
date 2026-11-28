@@ -287,6 +287,22 @@ class WebCallbackTests(unittest.TestCase):
             self.assertEqual(response.status, expected, path)
         conn.close()
 
+    def test_fonts_are_served_and_allowed_by_csp(self):
+        conn = HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        conn.request("GET", "/static/fonts/archivo-latin.woff2")
+        response = conn.getresponse()
+        body = response.read()
+        self.assertEqual((response.status, response.getheader("Content-Type"), body[:4]), (200, "font/woff2", b"wOF2"))
+        conn.request("GET", "/static/fonts/../../web.py")
+        response = conn.getresponse()
+        response.read()
+        self.assertEqual(response.status, 404)
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        response.read()
+        self.assertIn("font-src 'self'", response.getheader("Content-Security-Policy"))
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
