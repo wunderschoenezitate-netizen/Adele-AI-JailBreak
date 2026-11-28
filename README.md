@@ -51,7 +51,7 @@ Copy `deploy/web.env.example` to `/etc/adele/web.env` (mode 600). The bot and Di
    added with `CREATE TABLE IF NOT EXISTS`; existing tables are not changed.
 2. Install and configure Shkeeper, enable the wallets for the coins above, copy the API key.
 3. Put the env files in place, install `deploy/systemd/adele-web.service`, then `systemctl enable --now adele-web`.
-4. Copy `deploy/caddy/adeleai.org.caddy` to `/etc/caddy/sites/`, import it in the Caddyfile, `systemctl reload caddy`.
+4. Install `deploy/nginx/adeleai.org.conf` into nginx (commands are at the top of that file), then run certbot for HTTPS.
 5. Restart the Telegram bot and the Discord bot so they load the new code and settings.
 6. For auto-deploy, set the repository variable `DEPLOY_EXTRA_SERVICES` (for example `adele-web adele-discord`).
 
