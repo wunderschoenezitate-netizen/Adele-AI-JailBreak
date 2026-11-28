@@ -6,7 +6,6 @@ import html
 import json
 import logging
 import os
-import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -246,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
     def shkeeper_callback(self, body):
         if not shkeeper_api.verify_signature(cfg.SHKEEPER_API_KEY, body, self.headers.get("X-Shkeeper-Timestamp", ""),
                                              self.headers.get("X-Shkeeper-Signature", "")):
-            log.warning("Rejected Shkeeper callback with bad signature from %s", self.client_ip())
+            log.warning("Rejected Shkeeper callback with bad signature")
             self.send_body(401, b"bad signature", "text/plain")
             return
         try:
@@ -269,8 +268,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_body(202, b"accepted", "text/plain")
 
     def log_message(self, fmt, *args):
-        # Order tokens in paths are bearer secrets: keep them out of logs.
-        log.info("%s %s", self.client_ip(), re.sub(r"/order/[A-Za-z0-9_-]+", "/order/<token>", fmt % args))
+        # Anonymous shop: no per-request access log. Client IPs and order tokens (bearer secrets) are never written.
+        return
 
 
 def main():
