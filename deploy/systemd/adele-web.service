@@ -1,0 +1,22 @@
+[Unit]
+Description=AdeleAI website and Shkeeper callback
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=adele
+Group=adele
+WorkingDirectory=/opt/adele-bot
+EnvironmentFile=/etc/adele/web.env
+ExecStart=/usr/bin/python3 /opt/adele-bot/web.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/adele-bot
+
+[Install]
+WantedBy=multi-user.target
