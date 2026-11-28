@@ -1,6 +1,6 @@
 """Website for adeleai.org: plans, crypto checkout through Shkeeper, order status, Shkeeper callback.
 
-Runs behind Caddy on 127.0.0.1:WEB_PORT. Only the standard library is used, like bot.py.
+Runs behind nginx on 127.0.0.1:WEB_PORT. Only the standard library is used, like bot.py.
 """
 import html
 import json

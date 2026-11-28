@@ -42,7 +42,7 @@ Copy `deploy/web.env.example` to `/etc/adele/web.env` (mode 600). The bot and Di
 | `SHKEEPER_COINS` | Coins offered, Shkeeper names, comma-separated |
 | `SHKEEPER_MIN_PAID_RATIO` | Must match the Shkeeper wallet's lower limit (default 95 % = `0.95`) |
 | `PUBLIC_BASE_URL` | `https://adeleai.org`; Shkeeper must be able to reach `<this>/shkeeper/callback` |
-| `WEB_PORT` | Local port for `web.py`; must be free and match `deploy/caddy/adeleai.org.caddy` |
+| `WEB_PORT` | Local port for `web.py`; must be free and match `deploy/nginx/adeleai.org.conf` |
 | `TELEGRAM_BOT_USERNAME`, `DISCORD_INVITE_URL` | Links on the website |
 
 ### Setup order
