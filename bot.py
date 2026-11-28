@@ -289,6 +289,11 @@ def redeem_key(user, key, db):
     return access.redeem_key(db, user, key)
 
 
+# Reply-keyboard buttons. Pressing one while a support message is awaited cancels the support step instead of
+# being sent to support as the message text.
+MENU_CHOICES = {"💳 Subscription": "buy", "📊 My status": "status", "🔗 Referral link": "referral", "📋 Information": "info"}
+
+
 def handle(update, db):
     if "pre_checkout_query" in update:
         q = update["pre_checkout_query"]
@@ -412,7 +417,12 @@ def handle(update, db):
         db.commit()
         send(user, "Cancelled.")
         return
-    if db.execute("SELECT 1 FROM support_pending WHERE user_id=?", (user,)).fetchone() and text:
+    support_pending = db.execute("SELECT 1 FROM support_pending WHERE user_id=?", (user,)).fetchone()
+    if support_pending and (text in MENU_CHOICES or text.startswith("/")):
+        db.execute("DELETE FROM support_pending WHERE user_id=?", (user,))
+        db.commit()
+        support_pending = None
+    if support_pending and text:
         if not admin_id:
             send(user, "Support is currently unavailable. Please try again later.")
             return
@@ -457,8 +467,7 @@ def handle(update, db):
     elif message.get("text", "").split(" ")[0].split("@")[0] == "/paysupport":
         send(user, "For payment support, tap 🆘 Support in the menu to open a ticket.")
     else:
-        choices = {"💳 Subscription": "buy", "📊 My status": "status", "🔗 Referral link": "referral", "📋 Information": "info"}
-        selected = choices.get(message.get("text"))
+        selected = MENU_CHOICES.get(message.get("text"))
         if selected:
             action(selected, user, db)
 
