@@ -54,6 +54,12 @@ class SignatureTests(unittest.TestCase):
         self.assertTrue(shkeeper_api.verify_signature("test-api-key", VECTOR_BODY, VECTOR_TS, VECTOR_SIG,
                                                       now=int(VECTOR_TS) + 10))
 
+    def test_any_of_several_wallet_keys(self):
+        now = int(VECTOR_TS)
+        self.assertTrue(shkeeper_api.verify_any(["other-wallet-key", "test-api-key"], VECTOR_BODY, VECTOR_TS, VECTOR_SIG, now=now))
+        self.assertFalse(shkeeper_api.verify_any(["a", "b"], VECTOR_BODY, VECTOR_TS, VECTOR_SIG, now=now))
+        self.assertFalse(shkeeper_api.verify_any([], VECTOR_BODY, VECTOR_TS, VECTOR_SIG, now=now))
+
     def test_rejects_tampered_body_wrong_key_old_and_malformed(self):
         now = int(VECTOR_TS)
         self.assertFalse(shkeeper_api.verify_signature("test-api-key", VECTOR_BODY + b" ", VECTOR_TS, VECTOR_SIG, now=now))
@@ -149,6 +155,81 @@ class CallbackTests(Base):
                          2000 + 90 * 86400)
 
 
+class ReferralTests(Base):
+    NOW = 1_800_000_000
+
+    def refer(self, referrer, uid):
+        self.db.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, ?)", (uid, referrer))
+
+    def qualify(self, uid, now=None):
+        with self.db:
+            return access.referral_qualify(self.db, uid, now or self.NOW)
+
+    def expires(self, user):
+        row = self.db.execute("SELECT expires FROM subscriptions WHERE user_id=?", (user,)).fetchone()
+        return row[0] if row else None
+
+    def test_ten_subscribed_referrals_give_one_week(self):
+        self.db.execute("INSERT INTO users (user_id, referrer_id) VALUES (1, NULL)")
+        for uid in range(100, 109):
+            self.refer(1, uid)
+            self.assertEqual(self.qualify(uid), 0)
+        self.assertIsNone(self.expires(1))
+        self.refer(1, 109)
+        self.assertEqual(self.qualify(109), 1)
+        self.assertEqual(self.expires(1), self.NOW + 7 * 86400)
+        self.assertEqual(access.referral_stats(self.db, 1), (10, 10))
+        self.assertEqual(access.pending_referral_rewards(self.db), [(1, 1, 7)])
+        access.mark_referral_notified(self.db, 1, 1)
+        self.assertEqual(access.pending_referral_rewards(self.db), [])
+
+    def test_member_counts_once_and_one_step_per_ten(self):
+        rewards = lambda: self.db.execute("SELECT COUNT(*) FROM referral_rewards").fetchone()[0]
+        for uid in range(100, 120):
+            self.refer(1, uid)
+            self.qualify(uid)
+            self.assertEqual(self.qualify(uid), 0)  # repeated call: no double count
+        self.assertEqual(access.referral_stats(self.db, 1), (20, 20))
+        self.assertEqual(rewards(), 2)
+        self.assertEqual(self.expires(1), self.NOW + 14 * 86400)
+        for uid in range(120, 129):
+            self.refer(1, uid)
+            self.qualify(uid)
+        self.assertEqual(rewards(), 2)  # 29 members: still two steps
+        self.refer(1, 129)
+        self.assertEqual(self.qualify(129), 1)
+        self.assertEqual(rewards(), 3)
+        self.assertEqual(self.expires(1), self.NOW + 21 * 86400)
+
+    def test_reward_extends_existing_subscription(self):
+        with self.db:
+            access.extend_subscription(self.db, 1, 30, self.NOW)
+        for uid in range(100, 110):
+            self.refer(1, uid)
+            self.qualify(uid)
+        self.assertEqual(self.expires(1), self.NOW + 37 * 86400)
+
+    def test_no_referrer_self_referral_and_unknown_user_do_nothing(self):
+        self.db.execute("INSERT INTO users (user_id, referrer_id) VALUES (5, NULL)")
+        self.db.execute("INSERT INTO users (user_id, referrer_id) VALUES (6, 6)")
+        self.assertEqual(self.qualify(5), 0)
+        self.assertEqual(self.qualify(6), 0)
+        self.assertEqual(self.qualify(999), 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM referral_qualified").fetchone()[0], 0)
+
+    def test_redeeming_a_key_and_paying_in_telegram_both_count(self):
+        self.refer(1, 50)
+        o = self.order()
+        access.apply_callback(self.db, paid(o["order_id"]), now=self.NOW)
+        key = access.order(self.db, o["order_id"])["key"]
+        self.assertIsNone(access.redeem_key(self.db, 50, key, now=self.NOW))
+        self.assertEqual(access.referral_stats(self.db, 1), (1, 1))
+        self.refer(1, 51)
+        o2 = access.create_order(self.db, "telegram", "30", "BTC", tg_user=51, invoice=fake_invoice, now=self.NOW)
+        access.apply_callback(self.db, paid(o2["order_id"], balance="5"), now=self.NOW)
+        self.assertEqual(access.referral_stats(self.db, 1), (2, 2))
+
+
 class WebCallbackTests(unittest.TestCase):
     """Drives the real HTTP handler on a local port."""
 
@@ -159,7 +240,8 @@ class WebCallbackTests(unittest.TestCase):
         import web
         cls.web = web
         web.DB = os.environ["DATABASE_PATH"]
-        cfg.SHKEEPER_API_KEY = "test-api-key"
+        cfg.SHKEEPER_API_KEYS = ["btc-key-unrelated", "test-api-key"]
+        cfg.SHKEEPER_API_KEY = cfg.SHKEEPER_API_KEYS[0]
         db = access.connect(web.DB)
         access.init_db(db)
         cls.order = access.create_order(db, "web", "90", "BTC", invoice=fake_invoice)

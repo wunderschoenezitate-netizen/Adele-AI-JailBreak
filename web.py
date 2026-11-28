@@ -1,6 +1,6 @@
 """Website for adeleai.org: plans, crypto checkout through Shkeeper, order status, Shkeeper callback.
 
-Runs behind Caddy on 127.0.0.1:WEB_PORT. Only the standard library is used, like bot.py.
+Runs behind nginx on 127.0.0.1:WEB_PORT. Only the standard library is used, like bot.py.
 """
 import html
 import json
@@ -243,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_body(303, b"", "text/plain", {"Location": f"/order/{order['token']}"})
 
     def shkeeper_callback(self, body):
-        if not shkeeper_api.verify_signature(cfg.SHKEEPER_API_KEY, body, self.headers.get("X-Shkeeper-Timestamp", ""),
+        if not shkeeper_api.verify_any(cfg.SHKEEPER_API_KEYS, body, self.headers.get("X-Shkeeper-Timestamp", ""),
                                              self.headers.get("X-Shkeeper-Signature", "")):
             log.warning("Rejected Shkeeper callback with bad signature")
             self.send_body(401, b"bad signature", "text/plain")

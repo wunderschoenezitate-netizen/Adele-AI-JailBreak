@@ -158,9 +158,14 @@ def action(name, user, db):
         else:
             send(user, "You don't have an active subscription. Tap Subscription to join.")
     elif name == "referral":
-        count = db.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (user,)).fetchone()[0]
+        started, subscribed = access.referral_stats(db, user)
+        step = payment_config.REFERRAL_INVITES
         username = api("getMe")["username"]
-        send(user, f"Your referral link:\nhttps://t.me/{username}?start=ref_{user}\n\nPeople joined through your link: {count}")
+        send(user, f"Your referral link:\nhttps://t.me/{username}?start=ref_{user}\n\n"
+                   f"People who started the bot through your link: {started}\n"
+                   f"Members who subscribed through your link: {subscribed}\n\n"
+                   f"Every {step} subscribed members give you {payment_config.REFERRAL_REWARD_DAYS} days of free access. "
+                   f"Progress: {subscribed % step}/{step}")
     elif name == "info":
         send(user, "AdeleAI Private gives subscribers access to the private group.\n\nPlans: 30 days €5, 90 days €13, 365 days €48. Crypto plans require a new payment to renew.\n\nPayment support: tap 🆘 Support in the menu to open a ticket.")
 
@@ -282,6 +287,11 @@ KEY_RE = re.compile(r"ADL-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}")
 def redeem_key(user, key, db):
     """Return an error message, or None when the key was accepted."""
     return access.redeem_key(db, user, key)
+
+
+# Reply-keyboard buttons. Pressing one while a support message is awaited cancels the support step instead of
+# being sent to support as the message text.
+MENU_CHOICES = {"💳 Subscription": "buy", "📊 My status": "status", "🔗 Referral link": "referral", "📋 Information": "info"}
 
 
 def handle(update, db):
@@ -407,7 +417,12 @@ def handle(update, db):
         db.commit()
         send(user, "Cancelled.")
         return
-    if db.execute("SELECT 1 FROM support_pending WHERE user_id=?", (user,)).fetchone() and text:
+    support_pending = db.execute("SELECT 1 FROM support_pending WHERE user_id=?", (user,)).fetchone()
+    if support_pending and (text in MENU_CHOICES or text.startswith("/")):
+        db.execute("DELETE FROM support_pending WHERE user_id=?", (user,))
+        db.commit()
+        support_pending = None
+    if support_pending and text:
         if not admin_id:
             send(user, "Support is currently unavailable. Please try again later.")
             return
@@ -424,6 +439,7 @@ def handle(update, db):
             return
         expires = payment.get("subscription_expiration_date", int(time.time()) + 2592000)
         db.execute("INSERT INTO subscriptions VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET expires=max(expires, excluded.expires)", (user, expires))
+        access.referral_qualify(db, user)
         db.commit()
         invite(user)
     elif message.get("text", "").split(" ")[0].split("@")[0] == "/start":
@@ -451,8 +467,7 @@ def handle(update, db):
     elif message.get("text", "").split(" ")[0].split("@")[0] == "/paysupport":
         send(user, "For payment support, tap 🆘 Support in the menu to open a ticket.")
     else:
-        choices = {"💳 Subscription": "buy", "📊 My status": "status", "🔗 Referral link": "referral", "📋 Information": "info"}
-        selected = choices.get(message.get("text"))
+        selected = MENU_CHOICES.get(message.get("text"))
         if selected:
             action(selected, user, db)
 
@@ -491,6 +506,7 @@ def check_crypto_payments(db):
             expires = max(int(time.time()), row[0] if row else 0) + days * 86400
             db.execute("INSERT INTO subscriptions VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET expires=excluded.expires", (user, expires))
             db.execute("UPDATE crypto_invoices SET credited=1 WHERE invoice_id=?", (invoice_id,))
+            access.referral_qualify(db, user)
         try:
             invite(user)
         except Exception:
@@ -509,6 +525,25 @@ def notify_shkeeper_payments(db):
             logging.exception("Could not notify %s about order %s", user, order_id)
 
 
+def is_group_member(user):
+    try:
+        return api("getChatMember", chat_id=CHANNEL, user_id=user).get("status") in ("member", "administrator", "creator")
+    except Exception:
+        return False
+
+
+def notify_referral_rewards(db):
+    for referrer, unit, days in access.pending_referral_rewards(db):
+        try:
+            send(referrer, f"🎁 {payment_config.REFERRAL_INVITES} members you invited have subscribed. "
+                           f"{days} days of free access were added to your account.")
+            if not is_group_member(referrer):
+                invite(referrer)
+            access.mark_referral_notified(db, referrer, unit)
+        except Exception:
+            logging.exception("Could not notify %s about referral reward %s", referrer, unit)
+
+
 def connect():
     # One connection per thread. WAL lets the background checks and the handlers write without blocking each other.
     db = sqlite3.connect(DB, timeout=10)
@@ -523,6 +558,7 @@ def background(interval=30):
             expire_members(db)
             check_crypto_payments(db)
             notify_shkeeper_payments(db)
+            notify_referral_rewards(db)
         except Exception:
             logging.exception("Background check failed")
         time.sleep(interval)

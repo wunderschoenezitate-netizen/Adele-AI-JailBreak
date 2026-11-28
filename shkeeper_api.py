@@ -72,6 +72,11 @@ def create_invoice(crypto, external_id, eur):
     return address, str(amount)
 
 
+def verify_any(secrets, body, timestamp, signature, now=None, max_age=cfg.CALLBACK_MAX_AGE):
+    """True if the signature matches any configured wallet key."""
+    return any([verify_signature(s, body, timestamp, signature, now, max_age) for s in secrets])
+
+
 def verify_signature(secret, body, timestamp, signature, now=None, max_age=cfg.CALLBACK_MAX_AGE):
     """HMAC-SHA256(secret, f"{timestamp}." + raw body), as in shkeeper/services/webhook_hmac.py."""
     if not secret or not timestamp or not signature:
