@@ -9,6 +9,7 @@ import math
 import os
 import threading
 import time
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
@@ -27,17 +28,57 @@ MAX_BODY = 256 * 1024
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("web")
 
-# Landing page copy. Edit freely; it is plain text and gets HTML-escaped.
-TAGLINE = "A members-only Telegram group with working prompts, workflows and updates for the current AI models."
+# Landing page copy. Edit freely; it is plain text and gets HTML-escaped. [TODO] marks content only you can supply.
+TAGLINE = "A members-only Telegram group with working prompts and workflows for the current AI models."
 INSIDE = [
-    ("Private Telegram group", "You join with a single-use invitation as soon as your key is redeemed."),
-    ("Prompts and workflows", "Tested material for the current top models, posted inside the group."),
-    ("First to know", "New posts reach members before they appear anywhere else."),
+    ("lock", "Private Telegram group", "You join with a single-use invitation as soon as your key is redeemed."),
+    ("spark", "Prompts and workflows", "Tested material for the current top models, posted inside the group."),
+    ("bell", "First to know", "New posts reach members before they appear anywhere else."),
 ]
+INCLUDED = [
+    "Access to the private Telegram group for the term you pick",
+    "Everything posted in the group while your term runs",
+    "Support through the Telegram bot",
+]
+NOT_INCLUDED = [
+    "Automatic renewal: every term is a separate payment",
+    "[TODO: weitere Leistungen, die nicht enthalten sind]",
+]
+FAQ = [
+    ("What exactly do I get?",
+     "Access to the private AdeleAI Telegram group for the term you choose. After payment you get a single-use key, "
+     "and the Telegram bot turns it into your invitation. [TODO: Inhalte der Gruppe genauer beschreiben]"),
+    ("How long is the key valid?",
+     "Your term starts when you redeem the key in the Telegram bot, not when you pay. When the term ends, the bot "
+     "removes you from the group; buy a new term to stay. [TODO: Gültigkeit noch nicht eingelöster Keys festlegen]"),
+    ("What if my payment goes wrong or I send the wrong amount?",
+     "If less than the shown amount arrives, your order page says so: send the missing amount to the same address. "
+     "A payment that arrives after the one-hour price window is still credited. Coins sent on a different network "
+     "than the one shown cannot be recovered. [TODO: Regel für Überzahlungen und Erstattungen]"),
+    ("How do I reach support?",
+     "In the Telegram bot, tap 🆘 Support and write your message. Include your order number if you have one. "
+     "[TODO: Support-Kontakt]"),
+]
+FOOTER_LINKS = [("Imprint", "#"), ("Terms", "#"), ("Privacy", "#")]  # [TODO: Links zu den Seiten eintragen]
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC_TYPES = {"/static/fonts/archivo-latin.woff2": "font/woff2",
-                "/static/fonts/martian-mono-latin.woff2": "font/woff2"}
+                "/static/fonts/martian-mono-latin.woff2": "font/woff2",
+                "/static/fonts/unbounded-latin.woff2": "font/woff2",
+                "/static/img/logo-96.webp": "image/webp",
+                "/static/img/logo-256.webp": "image/webp",
+                "/static/img/banner.webp": "image/webp"}
+
+# Shkeeper coin -> (badge text, brand colour, name, network shown to the buyer or None)
+COIN_META = {
+    "BTC": ("BTC", "#f7931a", "Bitcoin", None),
+    "LTC": ("LTC", "#345d9d", "Litecoin", None),
+    "ETH": ("ETH", "#627eea", "Ethereum", None),
+    "SOL": ("SOL", "#9945ff", "Solana", None),
+    "SOLANA-USDT": ("USDT", "#26a17b", "Tether USDT", "Solana network"),
+    "ETH-USDT": ("USDT", "#26a17b", "Tether USDT", "Ethereum network (ERC20)"),
+    "USDT": ("USDT", "#26a17b", "Tether USDT", "Tron network (TRC20)"),
+}
 
 _rate_lock = threading.Lock()
 _rate = {}
@@ -58,12 +99,18 @@ def allow_order(ip, now=None):
         return True
 
 
+def per_month(eur, days):
+    """Price per month for a plan: 30 days = 1 month, 90 = 3, 365 = 12; other lengths use 30-day months."""
+    months = {30: 1, 90: 3, 365: 12}.get(days) or max(1, round(days / 30))
+    return (Decimal(eur) / months).quantize(Decimal("0.01"))
+
+
 def _rosette(cx=100, cy=100):
     """Guilloche rosette from rotated ellipses and a ring of circles, as on security print."""
     ell = "".join(f'<ellipse cx="{cx}" cy="{cy}" rx="92" ry="34" transform="rotate({k * 7.5} {cx} {cy})"/>' for k in range(24))
     ring = "".join(f'<circle cx="{cx + 46 * math.cos(math.radians(k * 10)):.1f}" cy="{cy + 46 * math.sin(math.radians(k * 10)):.1f}" r="40"/>'
                    for k in range(36))
-    return f'<g class="g1">{ell}</g><g class="g2">{ring}</g>'
+    return f'<g>{ell}</g><g class="r2">{ring}</g>'
 
 
 def _waves(width=600, height=36, lines=7, step=6):
@@ -81,187 +128,324 @@ SEAL = f'<svg class="seal" viewBox="0 0 200 200" aria-hidden="true" focusable="f
 BAND = ('<svg class="band" viewBox="0 0 600 36" preserveAspectRatio="none" aria-hidden="true" focusable="false">'
         f'{_waves()}</svg>')
 
+_ICON_PATHS = {
+    "term": '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 10h18M7 15h5"/>',
+    "wallet": '<path d="M4 7.5h14.5A1.5 1.5 0 0 1 20 9v9a1.5 1.5 0 0 1-1.5 1.5H5.5A1.5 1.5 0 0 1 4 18z"/><path d="M4 7.5 15 4.5v3"/><path d="M16 13.5h.01"/>',
+    "send": '<path d="M21 4 3 11.2l6.3 2.1L11.5 20l3.2-4.3L19 19z"/><path d="m9.3 13.3 8.2-6.3"/>',
+    "lock": '<rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/><path d="M12 15v2"/>',
+    "spark": '<path d="M12 3c.6 4.2 2.8 6.4 7 7-4.2.6-6.4 2.8-7 7-.6-4.2-2.8-6.4-7-7 4.2-.6 6.4-2.8 7-7z"/>',
+    "bell": '<path d="M6 16v-5a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+    "check": '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+    "plus": '<path d="M12 5v14M5 12h14"/>',
+    "minus": '<path d="M5 12h14"/>',
+}
+
+
+def icon(name, cls="icon"):
+    return (f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" '
+            f'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{_ICON_PATHS[name]}</svg>')
+
+
+def coin_badge(coin):
+    text, color, _, _ = COIN_META.get(coin, (coin[:4], "#6b6470", coin, None))
+    size = "7" if len(text) > 3 else "8.5"
+    return (f'<svg class="coin-badge" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'
+            f'<circle cx="16" cy="16" r="15" fill="{color}"/><text x="16" y="19.2" text-anchor="middle" '
+            f'font-family="Archivo,sans-serif" font-weight="800" font-size="{size}" fill="#fff">{html.escape(text)}</text></svg>')
+
+
 CSS = """
+@font-face{font-family:"Unbounded";src:url(/static/fonts/unbounded-latin.woff2) format("woff2");font-weight:200 900;font-display:swap}
 @font-face{font-family:"Archivo";src:url(/static/fonts/archivo-latin.woff2) format("woff2");font-weight:100 900;font-stretch:62% 125%;font-display:swap}
 @font-face{font-family:"Martian Mono";src:url(/static/fonts/martian-mono-latin.woff2) format("woff2");font-weight:100 800;font-stretch:75% 112.5%;font-display:swap}
-:root{--ground:#17163a;--ground-2:#211f4d;--on-ground:#e3e5f2;--on-ground-2:#a9adcf;--paper:#e6ebee;--paper-2:#d9e0e5;
---ink:#1e1c45;--ink-2:#4a4c72;--guilloche:#5b63a8;--brand:#ffc93c;--brand-ink:#1e1c45;--stamp:#b4236e;--ok:#1f7a4d;
---sans:"Archivo",system-ui,sans-serif;--mono:"Martian Mono",ui-monospace,monospace;color-scheme:dark}
+:root{--bg:#08070b;--bg-2:#100e14;--surface:#16131b;--surface-2:#1d1a23;--line:#2e2934;--line-2:#433b47;
+--text:#f4efe6;--text-2:#bcb3a4;--gold:#f2c35b;--gold-hi:#ffe6a3;--gold-lo:#b98320;
+--gold-grad:linear-gradient(135deg,#8a5a12 0%,#d9a23a 28%,#ffe29a 50%,#d39a2e 72%,#8a5a12 100%);
+--ok:#4fd6a0;--warn:#ff9c87;--display:"Unbounded","Archivo",system-ui,sans-serif;--sans:"Archivo",system-ui,sans-serif;
+--mono:"Martian Mono",ui-monospace,monospace;--radius:14px;color-scheme:dark}
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%;scrollbar-color:#4a4c86 var(--ground)}
-body{margin:0;background:var(--ground);color:var(--on-ground);font:400 1rem/1.6 var(--sans);caret-color:var(--brand);overflow-x:clip}
-::selection{background:var(--brand);color:var(--brand-ink)}
-a{color:var(--brand);text-underline-offset:.2em;text-decoration-thickness:1px}
-a:hover{text-decoration-thickness:2px}
-:focus-visible{outline:3px solid var(--brand);outline-offset:3px;border-radius:4px}
-.wrap{position:relative;max-width:46rem;margin:0 auto;padding:1.25rem 1rem 4rem}
-header,main,footer{position:relative;z-index:1}
-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:2.25rem}
-.mark{font-weight:800;font-stretch:125%;font-size:1.05rem;letter-spacing:-.01em;color:var(--on-ground);text-decoration:none}
-.mark span{font-weight:400}
-header a:not(.mark){font-size:.95rem}
-.cert{position:relative;background:var(--paper);color:var(--ink);border-radius:6px;overflow:hidden;
-box-shadow:0 1px 0 #ffffff80 inset,0 18px 40px -18px #05041a,0 2px 6px #05041a66}
-.band{display:block;width:100%;height:2.25rem;fill:none;stroke:var(--guilloche);stroke-width:.8;opacity:.55;background:var(--paper-2)}
-.cert-body{position:relative;padding:1.5rem 1.25rem 1.75rem}
-.seal{position:absolute;top:.5rem;right:-1.25rem;width:8.5rem;height:8.5rem;fill:none;stroke-width:.45;opacity:.45}
-.seal .g1{stroke:var(--guilloche)}.seal .g2{stroke:#a8841c}
-h1,h2{font-weight:800;font-stretch:112%;letter-spacing:-.02em;line-height:1.08;text-wrap:balance;margin:0}
-h1{position:relative;font-size:clamp(1.85rem,7.4vw,3rem);max-width:13ch;padding-right:2rem}
-.lede{position:relative;margin:.9rem 0 0;max-width:34rem;color:var(--ink-2);font-size:1.05rem}
-.serial{margin:1.6rem 0 0;display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem 1rem}
-.serial-label{font-size:.85rem;color:var(--ink-2)}
-.key{font:500 clamp(1.05rem,4.6vw,1.6rem)/1.2 var(--mono);font-stretch:100%;letter-spacing:.02em;color:var(--ink);white-space:nowrap}
-.redact{display:inline-block;width:3.1em;height:.8em;margin:0 .05em;vertical-align:-.02em;background:var(--ink);border-radius:2px}
-.foil{height:.55rem;margin:1.4rem -1.25rem 0;background:linear-gradient(100deg,#c7d6f6,#f5d0e8 18%,#fff1b8 34%,#c8f0e4 52%,#cfd2fb 70%,#f6d6c4 86%,#c7d6f6);background-size:200% 100%}
-.buy{margin-top:1.5rem}
-fieldset{border:0;margin:0 0 1.25rem;padding:0;min-width:0}
-legend{padding:0;margin-bottom:.55rem;font-weight:700;font-size:.95rem}
-.terms{display:grid;grid-template-columns:repeat(3,1fr)}
-.stub{position:relative;display:flex;flex-direction:column;gap:.1rem;padding:.8rem .75rem;border:1px solid #b9c2cc;background:#eef2f4;cursor:pointer}
-.stub+.stub{border-left:1px dashed #8d97a6}
-.stub:first-of-type{border-radius:6px 0 0 6px}.stub:last-of-type{border-radius:0 6px 6px 0}
-.stub input,.coin input{position:absolute;opacity:0;width:1px;height:1px}
-.stub-days{font-size:.9rem;color:var(--ink-2)}
-.stub-price{font:500 1.35rem/1.2 var(--mono)}
-.stub:hover{background:#f6f8f9}
-.stub:has(input:checked){background:var(--ink);color:var(--paper);border-color:var(--ink)}
-.stub:has(input:checked) .stub-days{color:#c9cce6}
-.stub:has(input:focus-visible),.coin:has(input:focus-visible){outline:3px solid var(--guilloche);outline-offset:2px}
-.coins{display:grid;grid-template-columns:1fr 1fr;gap:.45rem}
-.coin{position:relative;display:flex;align-items:center;gap:.6rem;padding:.6rem .7rem;border:1px solid #b9c2cc;border-radius:6px;background:#eef2f4;cursor:pointer;font-size:.92rem;line-height:1.3}
-.coin::before{content:"";flex:none;width:.9rem;height:.9rem;border-radius:50%;border:1.5px solid var(--ink-2);background:#fff}
-.coin:hover{background:#f6f8f9}
-.coin:has(input:checked){border-color:var(--ink);background:#fff}
-.coin:has(input:checked)::before{border-color:var(--ink);background:var(--ink);box-shadow:inset 0 0 0 2.5px #fff}
-.cta{display:block;width:100%;padding:1rem 1.25rem;border:0;border-radius:6px;background:var(--brand);color:var(--brand-ink);
-font:800 1.05rem/1 var(--sans);font-stretch:112%;letter-spacing:-.01em;cursor:pointer;text-align:center;text-decoration:none;
-box-shadow:0 1px 0 #fff6 inset,0 6px 14px -8px #8a6a00}
-.cta:hover{background:#ffd35f}
+html{-webkit-text-size-adjust:100%;scrollbar-color:#4a3f2c var(--bg);scroll-behavior:smooth;overflow-x:clip}
+body{margin:0;background:var(--bg);color:var(--text);font:400 1rem/1.6 var(--sans);caret-color:var(--gold);overflow-x:clip}
+::selection{background:var(--gold);color:#1a1206}
+a{color:var(--gold);text-underline-offset:.2em;text-decoration-thickness:1px}
+a:hover{color:var(--gold-hi);text-decoration-thickness:2px}
+:focus-visible{outline:3px solid var(--gold-hi);outline-offset:3px;border-radius:6px}
+.wrap{position:relative;max-width:68rem;margin:0 auto;padding:0 1rem}
+.skip{position:absolute;left:1rem;top:-3rem;background:var(--gold);color:#1a1206;padding:.5rem .8rem;border-radius:8px;z-index:10}
+.skip:focus{top:.75rem}
+header.site{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:1rem 0}
+.brand{display:flex;align-items:center;gap:.6rem;color:var(--text);text-decoration:none;font:600 1rem/1 var(--display);letter-spacing:-.01em}
+.brand img{width:2.5rem;height:2.5rem;border-radius:10px;mix-blend-mode:screen}
+.brand span{color:var(--text-2);font-weight:400}
+header.site nav a{font-size:.95rem}
+h1,h2,h3{font-family:var(--display);font-weight:700;letter-spacing:-.025em;line-height:1.08;text-wrap:balance;margin:0}
+h1{font-size:clamp(2rem,7.6vw,3.5rem)}
+h2{font-size:clamp(1.45rem,4.8vw,2.1rem);font-weight:600}
+h3{font-size:1.05rem;font-weight:600;letter-spacing:-.01em;line-height:1.25}
+.lede{margin:1rem 0 0;max-width:34rem;color:var(--text-2);font-size:1.1rem}
+.hero{position:relative;padding:1.5rem 0 2.5rem}
+.hero-bg{position:absolute;top:-5rem;bottom:0;left:calc(50% - 50vw);right:calc(50% - 50vw);z-index:-1;background:url(/static/img/banner.webp) 70% 30%/cover no-repeat;opacity:.2;
+filter:saturate(.8);-webkit-mask-image:linear-gradient(180deg,#000 0%,#000 35%,transparent 92%);mask-image:linear-gradient(180deg,#000 0%,#000 35%,transparent 92%)}
+.hero-bg::after{content:"";position:absolute;inset:0;background:radial-gradient(70% 60% at 70% 30%,transparent,var(--bg) 85%)}
+.hero-grid{display:grid;gap:2rem;align-items:center}
+.from{margin:1.25rem 0 0;color:var(--text);font-weight:600}
+.from b{font:500 1.05rem/1 var(--mono);color:var(--gold)}
+.ticket{position:relative;isolation:isolate;padding:1.5rem 1.4rem 1.25rem;border-radius:var(--radius);color:var(--text);
+background:linear-gradient(160deg,#1b1710,#0d0b10 55%,#15110a) padding-box,var(--gold-grad) border-box;border:1.5px solid transparent;
+box-shadow:0 24px 60px -24px #000,0 0 60px -20px #f2c35b55;overflow:hidden}
+.ticket .seal{position:absolute;z-index:-1;right:-3.5rem;top:-3rem;width:15rem;height:15rem;fill:none;stroke:#e3ad3e;stroke-width:.4;opacity:.28}
+.ticket .seal .r2{stroke:#fff1c7;opacity:.6}
+.ticket .band{display:block;width:calc(100% + 2.8rem);height:1.6rem;margin:1.1rem -1.4rem 0;fill:none;stroke:#e3ad3e;stroke-width:.7;opacity:.45}
+.t-head{display:flex;align-items:center;gap:.65rem}
+.t-head img{width:2.6rem;height:2.6rem;border-radius:10px;mix-blend-mode:screen}
+.t-name{font:600 1.05rem/1.1 var(--display)}
+.t-sub{color:var(--text-2);font-size:.85rem}
+.t-label{margin:1.6rem 0 .4rem;color:var(--text-2);font-size:.85rem}
+.key{font:500 clamp(1.15rem,5.4vw,1.7rem)/1.2 var(--mono);letter-spacing:.02em;white-space:nowrap;color:var(--gold-hi)}
+.redact{display:inline-block;width:3.05em;height:.78em;margin:0 .06em;vertical-align:-.02em;border-radius:3px;
+background:linear-gradient(100deg,#3b3020 25%,#b48a36 45%,#ffe29a 50%,#b48a36 55%,#3b3020 75%);background-size:400% 100%;background-position:100% 0;
+animation:shimmer 3.2s cubic-bezier(.45,0,.2,1) infinite}
+.redact:nth-child(2){animation-delay:.12s}.redact:nth-child(3){animation-delay:.24s}
+@keyframes shimmer{0%{background-position:100% 0}60%,100%{background-position:0 0}}
+.foil{height:.4rem;margin:1.2rem -1.4rem 0;background:var(--gold-grad);background-size:200% 100%;opacity:.9}
+.t-foot{margin:.9rem 0 0;color:var(--text-2);font-size:.85rem}
+@media (hover:hover) and (prefers-reduced-motion:no-preference){
+.ticket{transition:transform .6s cubic-bezier(.16,1,.3,1),box-shadow .6s;transform:perspective(1100px) rotateX(0) rotateY(0)}
+.ticket:hover{transform:perspective(1100px) rotateX(4deg) rotateY(-6deg) translateY(-3px);box-shadow:0 34px 70px -26px #000,0 0 80px -18px #f2c35b77}}
+section.block{padding:3rem 0 0}
+.block>h2{margin-bottom:1.25rem}
+.checkout{margin-top:.25rem;padding:1.25rem 1rem 0;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2)}
+.notice{margin:0 0 1rem;padding:.8rem 1rem;border:1px solid var(--warn);border-radius:10px;background:#2a1513;color:#ffd6cc}
+.notice a{color:inherit}
+fieldset{border:0;margin:0 0 1.5rem;padding:0;min-width:0}
+legend{padding:0;margin-bottom:.7rem;font:600 1rem/1.2 var(--display)}
+.terms{display:grid;gap:.6rem}
+.term,.coin{position:relative;display:grid;cursor:pointer;border:1.5px solid var(--line);border-radius:12px;background:var(--surface);transition:border-color .2s,background .2s}
+.term input,.coin input{position:absolute;opacity:0;width:1px;height:1px}
+.term{grid-template-columns:1fr auto;align-items:center;gap:.2rem 1rem;padding:1rem 1.1rem}
+.term-days{font:600 1.05rem/1.2 var(--display)}
+.term-price{grid-row:span 2;font:500 1.75rem/1 var(--mono);color:var(--text);text-align:right}
+.term-month{color:var(--text-2);font-size:.9rem}
+.term .tick{position:absolute;top:.6rem;right:.6rem;width:1.1rem;height:1.1rem;color:#1a1206;background:var(--gold);border-radius:50%;padding:2px;opacity:0;transition:opacity .2s}
+.term:hover,.coin:hover{border-color:var(--line-2);background:var(--surface-2)}
+.term:has(input:checked),.coin:has(input:checked){border-color:var(--gold);background:linear-gradient(160deg,#2a2112,var(--surface) 70%)}
+.term:has(input:checked) .term-price{color:var(--gold-hi)}
+.term:has(input:checked) .tick{opacity:1}
+.term:has(input:focus-visible),.coin:has(input:focus-visible){outline:3px solid var(--gold-hi);outline-offset:2px}
+.coins{display:grid;grid-template-columns:1fr 1fr;gap:.55rem}
+.coin{grid-template-columns:auto 1fr;align-items:center;gap:.15rem .7rem;padding:.75rem .8rem}
+.coin-badge{grid-row:span 2;width:2rem;height:2rem}
+.coin-name{font-weight:700;line-height:1.2}
+.coin-net{color:var(--text-2);font-size:.82rem;line-height:1.25}
+.coin-net.is-net{color:var(--gold)}
+.coin.has-net{grid-column:1/-1}
+.net-note{grid-column:1/-1;display:flex;gap:.5rem;align-items:flex-start;margin:.3rem 0 0;color:var(--text-2);font-size:.88rem;line-height:1.45}
+.net-note .icon{flex:none;width:1.1rem;height:1.1rem;margin-top:.1rem;color:var(--gold)}
+.checkout-bar{position:sticky;bottom:0;z-index:5;margin:0 -1rem;padding:.85rem 1rem calc(.85rem + env(safe-area-inset-bottom));
+background:#0c0b10f2;border-top:1px solid var(--line);border-radius:0 0 var(--radius) var(--radius)}
+.summary{display:flex;justify-content:space-between;align-items:baseline;gap:.75rem;margin:0 0 .65rem;font-size:.95rem;color:var(--text-2)}
+.summary strong{color:var(--text);font-weight:700}
+.sum-plan,.sum-coin,.sum-price{display:none}
+.sum-price{font:500 1.15rem/1 var(--mono);color:var(--gold-hi)}
+@supports selector(:has(*)){.sum-fallback{display:none}}
+.cta{display:block;width:100%;padding:1.05rem 1.25rem;border:0;border-radius:12px;color:#1a1206;cursor:pointer;text-align:center;text-decoration:none;
+font:700 1.02rem/1 var(--display);letter-spacing:-.01em;background:linear-gradient(180deg,#ffe6a3,#f0bd4e 45%,#c8922a);
+box-shadow:0 1px 0 #fff8 inset,0 10px 28px -12px #f2c35b99}
+.cta:hover{color:#1a1206;filter:brightness(1.06)}
 .cta:active{transform:translateY(1px)}
-.fine{margin:.85rem 0 0;font-size:.85rem;line-height:1.5;color:var(--ink-2);max-width:36rem}
-.notice{margin:0 0 1.1rem;padding:.75rem .9rem;border:1px solid var(--stamp);border-radius:6px;background:#f7e3ee;color:#6d1442;font-size:.95rem}
-.order-meta{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1.1rem}
-.order-no{font:500 .8rem/1.3 var(--mono);color:var(--ink-2);word-break:break-all}
-.stamp{flex:none;padding:.35rem .7rem;border:3px double currentColor;border-radius:6px;
-font:800 .95rem/1 var(--sans);font-stretch:125%;transform:rotate(-6deg);mix-blend-mode:multiply}
-.stamp-wait{color:var(--stamp)}.stamp-ok{color:var(--ok)}
+.fine{margin:.9rem 0 1.25rem;font-size:.86rem;line-height:1.5;color:var(--text-2);max-width:40rem}
+.timeline{list-style:none;margin:0;padding:0;display:grid;gap:0;counter-reset:step}
+.timeline li{position:relative;display:grid;grid-template-columns:3rem 1fr;gap:1rem;padding-bottom:1.6rem;counter-increment:step}
+.timeline li:last-child{padding-bottom:0}
+.timeline li::after{content:"";position:absolute;left:1.5rem;top:3.1rem;bottom:.3rem;width:1px;background:linear-gradient(var(--gold-lo),transparent)}
+.timeline li:last-child::after{display:none}
+.step-icon{display:grid;place-items:center;width:3rem;height:3rem;border-radius:50%;border:1.5px solid var(--gold-lo);background:var(--surface);color:var(--gold)}
+.step-icon .icon{width:1.35rem;height:1.35rem}
+.step-n{display:block;margin-bottom:.15rem;font:500 .8rem/1.2 var(--mono);color:var(--gold)}
+.timeline p{margin:.3rem 0 0;color:var(--text-2)}
+.features{display:grid;gap:.75rem}
+.feature{padding:1.2rem 1.2rem 1.1rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2)}
+.feature .icon{width:1.6rem;height:1.6rem;color:var(--gold);margin-bottom:.8rem}
+.feature p{margin:.35rem 0 0;color:var(--text-2)}
+.scope{display:grid;gap:.75rem;margin-top:.75rem}
+.scope>div{padding:1.1rem 1.2rem;border:1px solid var(--line);border-radius:var(--radius)}
+.scope ul{list-style:none;margin:.6rem 0 0;padding:0;display:grid;gap:.45rem}
+.scope li{display:grid;grid-template-columns:1.25rem 1fr;gap:.55rem;color:var(--text-2)}
+.scope li .icon{width:1.2rem;height:1.2rem;margin-top:.15rem}
+.scope .yes .icon{color:var(--ok)}.scope .no .icon{color:var(--text-2)}
+.faq details{border-bottom:1px solid var(--line)}
+.faq details:first-of-type{border-top:1px solid var(--line)}
+.faq summary{list-style:none;display:flex;justify-content:space-between;gap:1rem;padding:1.05rem 0;cursor:pointer;font-weight:700}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary .icon{flex:none;width:1.2rem;height:1.2rem;color:var(--gold);transition:transform .25s}
+.faq details[open] summary .icon{transform:rotate(45deg)}
+.faq details p{margin:0 0 1.1rem;color:var(--text-2);max-width:44rem}
+footer.site{margin-top:4rem;padding:1.5rem 0 calc(2rem + env(safe-area-inset-bottom));border-top:1px solid var(--line);color:var(--text-2);font-size:.9rem;
+display:flex;flex-wrap:wrap;justify-content:space-between;gap:.75rem 2rem}
+footer.site nav{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem}
+.order{max-width:40rem;margin:1rem auto 0}
+.order .ticket{margin-top:1.4rem;padding-bottom:1.4rem}
+.o-meta{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1rem}
+.o-no{font:500 .78rem/1.3 var(--mono);color:var(--text-2);word-break:break-all}
+.stamp{flex:none;padding:.35rem .7rem;border:3px double currentColor;border-radius:8px;font:700 .85rem/1 var(--display);transform:rotate(-5deg)}
+.stamp-wait{color:var(--gold)}.stamp-ok{color:var(--ok)}.stamp-bad{color:var(--warn)}
+.order h1{font-size:clamp(1.7rem,6.4vw,2.6rem)}
+.order .lede{font-size:1rem;margin-top:.6rem}
 .pay{margin:1.4rem 0 0}
-.pay dt{font-size:.85rem;color:var(--ink-2);margin-top:1rem}
-.pay dd{margin:.2rem 0 0}
-.amount{font:500 clamp(1.3rem,5.6vw,2rem)/1.15 var(--mono);letter-spacing:-.01em}
-.amount small{font:600 .95rem/1.2 var(--sans);letter-spacing:0;color:var(--ink-2);margin-left:.35rem}
-.addr{display:block;padding:.75rem .85rem;border:1px solid #b9c2cc;border-radius:6px;background:#fff;
+.pay dt{font-size:.85rem;color:var(--text-2);margin-top:1rem}
+.pay dd{margin:.25rem 0 0}
+.amount{font:500 clamp(1.35rem,6vw,2rem)/1.15 var(--mono);color:var(--gold-hi)}
+.amount small{font:600 .95rem/1.2 var(--sans);color:var(--text-2);margin-left:.4rem}
+.addr{display:block;padding:.8rem .9rem;border:1px solid var(--line-2);border-radius:10px;background:#0b0a0e;color:var(--text);
 font:500 .92rem/1.5 var(--mono);word-break:break-all;user-select:all;-webkit-user-select:all}
-.serial-big{display:block;margin-top:1.6rem}
-.serial-big .serial-label{display:block;margin-bottom:.35rem}
-.serial-big .key{font-size:clamp(1.45rem,7.4vw,2.5rem);letter-spacing:.01em}
+.key-big{font-size:clamp(1.45rem,7.2vw,2.4rem)}
 .key-live{position:relative;display:inline-block}
-.key-live::after{content:"";position:absolute;inset:-.1em -.15em;background:var(--ink);transform-origin:right center;
-animation:unredact .9s cubic-bezier(.16,1,.3,1) .35s both}
+.key-live::after{content:"";position:absolute;inset:-.1em -.15em;background:var(--gold-grad);transform-origin:right center;animation:unredact .9s cubic-bezier(.16,1,.3,1) .35s both}
 @keyframes unredact{to{transform:scaleX(0)}}
-@media (prefers-reduced-motion:reduce){.key-live::after{animation:none;transform:scaleX(0)}}
-.after{margin-top:3.25rem}
-.after h2{font-size:clamp(1.35rem,4.6vw,1.8rem);color:var(--on-ground);margin-bottom:1.1rem}
-.steps{list-style:none;margin:0;padding:0;counter-reset:step;display:grid;gap:1rem}
-.steps li{counter-increment:step;display:grid;grid-template-columns:2.25rem 1fr;gap:.75rem;align-items:baseline;color:var(--on-ground-2)}
-.steps li::before{content:counter(step);font:500 1.1rem/1 var(--mono);color:var(--brand)}
-.steps strong{color:var(--on-ground);font-weight:700}
-.inside{margin:0;display:grid;gap:0}
-.inside div{padding:.9rem 0;border-top:1px solid #34327a}
-.inside dt{font-weight:700;color:var(--on-ground)}
-.inside dd{margin:.15rem 0 0;color:var(--on-ground-2)}
-footer{margin-top:3.5rem;padding-top:1.25rem;border-top:1px solid #34327a;color:var(--on-ground-2);font-size:.9rem;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem}
-@media (min-width:44rem){
-.wrap{padding-top:2rem}
-.cert-body{padding:2.25rem 2.5rem 2.5rem}
-.seal{width:11rem;height:11rem;top:1rem;right:1.25rem}
-.foil{margin-left:-2.5rem;margin-right:-2.5rem}
+.order .cta{margin-top:1.3rem}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.redact{animation:none;background-position:50% 0}
+.key-live::after{animation:none;transform:scaleX(0)}*{transition:none!important}}
+@media (min-width:46rem){
+.wrap{padding:0 1.5rem}
+.hero{padding:3rem 0 3.5rem}
+.hero-grid{grid-template-columns:1.1fr .9fr;gap:3rem}
+.checkout{padding:1.75rem 1.75rem 0}
+.checkout-bar{margin:0 -1.75rem;padding:1rem 1.75rem}
+.terms{grid-template-columns:repeat(3,1fr)}
+.term{grid-template-columns:1fr;padding:1.2rem 1.2rem 1.1rem;gap:.35rem}
+.term-price{grid-row:auto;text-align:left;font-size:2rem;margin-top:.35rem}
 .coins{grid-template-columns:repeat(3,1fr)}
-.steps{grid-template-columns:repeat(3,1fr);gap:1.5rem}
-.steps li{grid-template-columns:1fr;gap:.4rem}
-.stamp{font-size:1.15rem}
+.coin.has-net{grid-column:auto}
+.timeline{grid-template-columns:repeat(3,1fr);gap:1.5rem}
+.timeline li{grid-template-columns:1fr;gap:.9rem;padding:0}
+.timeline li::after{left:3.6rem;right:-1.5rem;top:1.5rem;bottom:auto;width:auto;height:1px;background:linear-gradient(90deg,var(--gold-lo),transparent)}
+.features{grid-template-columns:repeat(3,1fr)}
+.scope{grid-template-columns:1fr 1fr}
+.ticket{padding:1.75rem 1.75rem 1.4rem}
+.ticket .band{width:calc(100% + 3.5rem);margin-left:-1.75rem;margin-right:-1.75rem}
+.foil{margin-left:-1.75rem;margin-right:-1.75rem}
 }
 """
 
 
-def page(title, body, refresh=None):
+def page(title, body, refresh=None, extra_css=""):
     meta = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    bot = html.escape(TG_BOT)
+    links = "".join(f'<a href="{html.escape(href)}">{html.escape(label)}</a>' for label, href in FOOTER_LINKS)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">{meta}
-<meta name="theme-color" content="#17163a">
-<link rel="preload" href="/static/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
-<title>{html.escape(title)}</title><style>{CSS}</style></head><body><div class="wrap">
-<header><a class="mark" href="/">AdeleAI <span>Private</span></a>
-<a href="https://t.me/{html.escape(TG_BOT)}">Telegram bot</a></header>
-<main>{body}</main>
-<footer><span>Payments are processed in crypto through our own payment server.</span>
-<a href="https://t.me/{html.escape(TG_BOT)}">@{html.escape(TG_BOT)}</a></footer>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">{meta}
+<meta name="theme-color" content="#08070b">
+<link rel="icon" href="/static/img/logo-96.webp" type="image/webp">
+<link rel="preload" href="/static/fonts/unbounded-latin.woff2" as="font" type="font/woff2" crossorigin>
+<title>{html.escape(title)}</title><style>{CSS}{extra_css}</style></head><body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+<header class="site"><a class="brand" href="/"><img src="/static/img/logo-96.webp" alt="" width="40" height="40">AdeleAI&nbsp;<span>Private</span></a>
+<nav aria-label="Telegram"><a href="https://t.me/{bot}">Telegram bot</a></nav></header>
+<main id="main">{body}</main>
+<footer class="site"><span>Payments are processed in crypto through our own payment server.</span>
+<nav aria-label="Legal">{links}<a href="https://t.me/{bot}">@{bot}</a></nav></footer>
 </div></body></html>""".encode("utf-8")
 
 
 def _redacted_key():
-    return ('<span class="key" aria-label="Your key appears here after payment">ADL-'
-            '<span class="redact"></span>-<span class="redact"></span>-<span class="redact"></span></span>')
+    return 'ADL-<span class="redact"></span>-<span class="redact"></span>-<span class="redact"></span>'
+
+
+def _ticket(label, key_html, foot, cls=""):
+    return (f'<div class="ticket {cls}">{SEAL}<div class="t-head"><img src="/static/img/logo-256.webp" alt="" width="42" height="42">'
+            '<div><div class="t-name">AdeleAI Private</div><div class="t-sub">Access key</div></div></div>'
+            f'<p class="t-label">{html.escape(label)}</p><p class="key" style="margin:0">{key_html}</p>'
+            f'<div class="foil" aria-hidden="true"></div><p class="t-foot">{html.escape(foot)}</p>{BAND}</div>')
+
+
+def _summary_css(coins):
+    rules = []
+    for p in cfg.PLANS:
+        rules.append(f'.checkout:has(input[name="plan"][value="{p}"]:checked) [data-plan="{p}"]{{display:inline}}')
+    for c in coins:
+        rules.append(f'.checkout:has(input[name="coin"][value="{c}"]:checked) [data-coin="{c}"]{{display:inline}}')
+    return "".join(rules)
 
 
 def landing(error=""):
     coins = shkeeper_api.available_coins()
+    bot = html.escape(TG_BOT)
     err = f'<p class="notice" role="alert">{html.escape(error)}</p>' if error else ""
+    cheapest = min(per_month(eur, days) for eur, days in cfg.PLANS.values())
     if coins:
         terms = "".join(
-            f'<label class="stub"><input type="radio" name="plan" value="{p}"{" checked" if p == "90" else ""}>'
-            f'<span class="stub-days">{days} days</span><span class="stub-price">€{html.escape(eur)}</span></label>'
+            f'<label class="term"><input type="radio" name="plan" value="{p}"{" checked" if p == "90" else ""}>'
+            f'<span class="term-days">{days} days</span><span class="term-price">€{html.escape(eur)}</span>'
+            f'<span class="term-month">€{per_month(eur, days)} per month</span>{icon("check", "tick")}</label>'
             for p, (eur, days) in cfg.PLANS.items())
-        options = "".join(
-            f'<label class="coin"><input type="radio" name="coin" value="{c}"{" checked" if i == 0 else ""}>'
-            f'{html.escape(cfg.COIN_LABELS[c])}</label>' for i, c in enumerate(coins))
-        checkout = (f'<form class="buy" method="post" action="/order">{err}'
-                    f'<fieldset class="terms"><legend>Term</legend>{terms}</fieldset>'
-                    f'<fieldset class="coins"><legend>Pay with</legend>{options}</fieldset>'
-                    '<button class="cta" type="submit">Continue to payment</button>'
+        tiles = []
+        for i, c in enumerate(coins):
+            _, _, name, net = COIN_META.get(c, (c, "", cfg.COIN_LABELS.get(c, c), None))
+            sub = (f'<span class="coin-net is-net">{html.escape(net)}</span>' if net
+                   else f'<span class="coin-net">{html.escape(COIN_META.get(c, (c,))[0])}</span>')
+            tiles.append(f'<label class="coin{" has-net" if net else ""}"><input type="radio" name="coin" value="{c}"{" checked" if i == 0 else ""}>'
+                         f'{coin_badge(c)}<span class="coin-name">{html.escape(name)}</span>{sub}</label>')
+        if any(COIN_META.get(c, (None,) * 4)[3] for c in coins):
+            tiles.append(f'<p class="net-note">{icon("spark")}<span>USDT runs on more than one network. Send it on the '
+                         'network shown on the tile you pick. A transfer on another network cannot be recovered.</span></p>')
+        sum_plan = "".join(f'<strong class="sum-plan" data-plan="{p}">{days} days</strong>' for p, (_, days) in cfg.PLANS.items())
+        sum_price = "".join(f'<span class="sum-price" data-plan="{p}">€{html.escape(eur)}</span>' for p, (eur, _) in cfg.PLANS.items())
+        sum_coin = "".join(f'<span class="sum-coin" data-coin="{c}">, paid with {html.escape(cfg.COIN_LABELS.get(c, c))}</span>'
+                           for c in coins)
+        checkout = (f'<form class="checkout" method="post" action="/order">{err}'
+                    f'<fieldset><legend>Term</legend><div class="terms">{terms}</div></fieldset>'
+                    f'<fieldset><legend>Pay with</legend><div class="coins">{"".join(tiles)}</div></fieldset>'
+                    '<div class="checkout-bar"><p class="summary"><span><span class="sum-fallback">Your selection</span>'
+                    f'{sum_plan}{sum_coin}</span>{sum_price}</p>'
+                    '<button class="cta" type="submit">Continue to payment</button></div>'
                     '<p class="fine">The next page shows the exact amount and a payment address. '
                     'Your key is issued as soon as the payment is confirmed.</p></form>')
     else:
-        checkout = (f'<div class="buy">{err}<p class="notice">Checkout on the website is paused right now. '
-                    f'You can still buy in the <a href="https://t.me/{html.escape(TG_BOT)}">Telegram bot</a>.</p></div>')
+        checkout = (f'<div class="checkout">{err}<p class="notice">Checkout on the website is paused right now. '
+                    f'You can still buy in the <a href="https://t.me/{bot}">Telegram bot</a>.</p></div>')
+    steps = [("term", "Pick a term and a coin", "You get an address and the exact amount to send."),
+             ("wallet", "Pay from any wallet", "Your order page updates by itself and shows your key once the payment is confirmed."),
+             ("send", "Redeem the key in Telegram", "The bot checks the key and sends your invitation to the private group.")]
+    timeline = "".join(f'<li><span class="step-icon">{icon(ic)}</span><div><span class="step-n">Step {i}</span>'
+                       f'<h3>{html.escape(t)}</h3><p>{html.escape(d)}</p></div></li>'
+                       for i, (ic, t, d) in enumerate(steps, 1))
+    features = "".join(f'<div class="feature">{icon(ic)}<h3>{html.escape(t)}</h3><p>{html.escape(d)}</p></div>'
+                       for ic, t, d in INSIDE)
+    yes = "".join(f'<li>{icon("check")}<span>{html.escape(t)}</span></li>' for t in INCLUDED)
+    no = "".join(f'<li>{icon("minus")}<span>{html.escape(t)}</span></li>' for t in NOT_INCLUDED)
+    faq = "".join(f'<details><summary>{html.escape(q)}{icon("plus")}</summary><p>{html.escape(a)}</p></details>' for q, a in FAQ)
     discord = f' or on <a href="{html.escape(DISCORD_INVITE)}">Discord</a>' if DISCORD_INVITE else ""
-    inside = "".join(f"<div><dt>{html.escape(t)}</dt><dd>{html.escape(d)}</dd></div>" for t, d in INSIDE)
+    ticket = _ticket("Your key appears here after payment", _redacted_key(), "Single use. You redeem it in the Telegram bot.")
     return page("AdeleAI Private", f"""
-<article class="cert">{BAND}<div class="cert-body">{SEAL}
-<h1>Your key to AdeleAI Private</h1>
-<p class="lede">{html.escape(TAGLINE)}</p>
-<p class="serial"><span class="serial-label">Access key</span>{_redacted_key()}</p>
-<div class="foil" aria-hidden="true"></div>
-{checkout}
-</div>{BAND}</article>
-<section class="after"><h2>How it works</h2><ol class="steps">
-<li><span><strong>Pick a term and a coin.</strong> You get an address and the exact amount to send.</span></li>
-<li><span><strong>Pay from any wallet.</strong> Your order page updates by itself and shows your key once the payment is confirmed.</span></li>
-<li><span><strong>Open the key in Telegram.</strong> The bot checks it and sends your invitation to the private group.</span></li>
-</ol></section>
-<section class="after"><h2>Inside the group</h2><dl class="inside">{inside}</dl>
-<p class="fine" style="color:var(--on-ground-2)">You can also buy directly in the <a href="https://t.me/{html.escape(TG_BOT)}">Telegram bot</a>{discord}.</p></section>""")
+<section class="hero"><div class="hero-bg" aria-hidden="true"></div><div class="hero-grid">
+<div><h1>Your key to AdeleAI Private</h1><p class="lede">{html.escape(TAGLINE)}</p>
+<p class="from">From <b>€{cheapest}</b> per month, paid in crypto.</p></div>
+{ticket}</div></section>
+<section class="block" aria-labelledby="buy-h"><h2 id="buy-h">Get your key</h2>{checkout}</section>
+<section class="block" aria-labelledby="how-h"><h2 id="how-h">How it works</h2><ol class="timeline">{timeline}</ol></section>
+<section class="block" aria-labelledby="in-h"><h2 id="in-h">Inside the group</h2><div class="features">{features}</div>
+<div class="scope"><div class="yes"><h3>Included</h3><ul>{yes}</ul></div><div class="no"><h3>Not included</h3><ul>{no}</ul></div></div></section>
+<section class="block faq" aria-labelledby="faq-h"><h2 id="faq-h">Questions</h2>{faq}
+<p class="fine">You can also buy directly in the <a href="https://t.me/{bot}">Telegram bot</a>{discord}.</p></section>""",
+                extra_css=_summary_css(coins))
 
 
 STATUS_TEXT = {
-    "NEW": ("Creating invoice", "stamp-wait", "This order has no payment address"),
+    "NEW": ("Creating invoice", "stamp-bad", "This order has no payment address"),
     "PENDING": ("Awaiting payment", "stamp-wait", "Waiting for your payment"),
     "PARTIAL": ("Partly paid", "stamp-wait", "Part of your payment arrived"),
     "PAID": ("Paid", "stamp-ok", "Your key is ready"),
-    "REVIEW": ("Under review", "stamp-wait", "Your payment needs a check"),
-    "FAILED": ("Invoice failed", "stamp-wait", "This order has no payment address"),
+    "REVIEW": ("Under review", "stamp-bad", "Your payment needs a check"),
+    "FAILED": ("Invoice failed", "stamp-bad", "This order has no payment address"),
 }
 
 
-def _cert(order, heading, inner):
-    label, css, _ = STATUS_TEXT.get(order["status"], (order["status"], "stamp-wait", ""))
-    return (f'<article class="cert">{BAND}<div class="cert-body">'
-            f'<div class="order-meta"><span class="order-no">Order {html.escape(order["order_id"])}</span>'
-            f'<span class="stamp {css}">{html.escape(label)}</span></div>'
-            f'<h1>{html.escape(heading)}</h1>'
-            f'<p class="lede">{order["days"]} days of access for €{html.escape(order["eur"])}</p>'
-            f'{inner}</div>{BAND}</article>')
+def _order_head(order, heading):
+    label, css, _ = STATUS_TEXT.get(order["status"], (order["status"], "stamp-bad", ""))
+    return (f'<div class="o-meta"><span class="o-no">Order {html.escape(order["order_id"])}</span>'
+            f'<span class="stamp {css}">{html.escape(label)}</span></div><h1>{html.escape(heading)}</h1>'
+            f'<p class="lede">{order["days"]} days of access for €{html.escape(order["eur"])}</p>')
 
 
 def order_page(order):
@@ -273,41 +457,37 @@ def order_page(order):
     if order["status"] == "PAID":
         if order["key"]:
             key = html.escape(order["key"])
-            inner = (f'<p class="serial serial-big"><span class="serial-label">Access key</span>'
-                     f'<span class="key key-live">{key}</span></p><div class="foil" aria-hidden="true"></div>'
-                     f'<div class="buy"><a class="cta" href="https://t.me/{bot}?start=key_{key}">Activate in Telegram</a>'
-                     f'<p class="fine">The key works once. You can also paste it as a message into '
-                     f'<a href="https://t.me/{bot}" style="color:var(--ink)">@{bot}</a>. '
-                     'Keep this page private: anyone with the link can see the key.</p></div>')
+            body = (_order_head(order, heading)
+                    + _ticket("Your access key", f'<span class="key-big key-live">{key}</span>', "Works once. Keep it private.")
+                    + f'<a class="cta" href="https://t.me/{bot}?start=key_{key}">Activate in Telegram</a>'
+                    f'<p class="fine">You can also paste the key as a message into <a href="https://t.me/{bot}">@{bot}</a>. '
+                    'Anyone with the link to this page can see the key.</p>')
         else:
-            heading = "Access added to your Telegram account"
-            inner = ('<div class="foil" aria-hidden="true"></div><p class="fine" style="font-size:1rem;color:var(--ink)">'
-                     'The bot has sent your invitation to the private group.</p>')
-        return page(title, _cert(order, heading, inner))
+            body = (_order_head(order, "Access added to your Telegram account")
+                    + '<p class="fine" style="font-size:1rem">The bot has sent your invitation to the private group.</p>')
+        return page(title, f'<div class="order">{body}</div>')
     if order["status"] in ("NEW", "FAILED") or not order["address"]:
-        inner = ('<p class="notice" style="margin-top:1.4rem">'
-                 '<a href="/" style="color:inherit">Start a new order</a> to get a payment address.</p>')
-        return page(title, _cert(order, STATUS_TEXT["FAILED"][2], inner))
-    stale = now > order["expires"] and order["status"] == "PENDING"
+        body = (_order_head(order, STATUS_TEXT["FAILED"][2])
+                + '<p class="notice" style="margin-top:1.4rem"><a href="/">Start a new order</a> to get a payment address.</p>')
+        return page(title, f'<div class="order">{body}</div>')
     notes = ""
-    if stale:
+    if now > order["expires"] and order["status"] == "PENDING":
         notes += ('<p class="notice" style="margin-top:1.4rem">This amount was calculated more than an hour ago. '
-                  'If you have not paid yet, <a href="/" style="color:inherit">start a new order</a> for a current amount. '
+                  'If you have not paid yet, <a href="/">start a new order</a> for a current amount. '
                   'A payment you already sent is still credited.</p>')
     if order["status"] == "PARTIAL":
         notes += ('<p class="notice" style="margin-top:1.4rem">Send the missing amount to the same address. '
                   'Your key is issued when the full amount has arrived.</p>')
     if order["status"] == "REVIEW":
-        notes += (f'<p class="notice" style="margin-top:1.4rem">Contact support in <a href="https://t.me/{bot}" '
-                  'style="color:inherit">the Telegram bot</a> and include the order number.</p>')
-    inner = (f'{notes}<dl class="pay"><dt>Send exactly</dt>'
-             f'<dd class="amount">{html.escape(order["amount_crypto"])}<small>{coin}</small></dd>'
-             f'<dt>To this address</dt><dd><span class="addr">{html.escape(order["address"])}</span></dd></dl>'
-             f'<p class="fine">Send only {coin} on this network. Another coin or network cannot be recovered. '
-             'Tap the address once to select it. This page refreshes by itself and shows your key when the payment is confirmed.</p>'
-             f'<p class="serial"><span class="serial-label">Access key</span>{_redacted_key()}</p>'
-             '<div class="foil" aria-hidden="true"></div>')
-    return page(title, _cert(order, heading, inner), refresh=20)
+        notes += (f'<p class="notice" style="margin-top:1.4rem">Contact support in <a href="https://t.me/{bot}">the Telegram bot</a> '
+                  'and include the order number.</p>')
+    body = (_order_head(order, heading) + notes
+            + f'<dl class="pay"><dt>Send exactly</dt><dd class="amount">{html.escape(order["amount_crypto"])}<small>{coin}</small></dd>'
+            f'<dt>To this address</dt><dd><span class="addr">{html.escape(order["address"])}</span></dd></dl>'
+            f'<p class="fine">Send only {coin} on this network. Another coin or network cannot be recovered. '
+            'Tap the address once to select it. This page refreshes by itself and shows your key when the payment is confirmed.</p>'
+            + _ticket("Your key appears here after payment", _redacted_key(), "Single use. You redeem it in the Telegram bot."))
+    return page(title, f'<div class="order">{body}</div>', refresh=20)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -327,7 +507,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
