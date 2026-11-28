@@ -1,0 +1,19 @@
+# Site block for adeleai.org. Import it from the main Caddyfile with:
+#   import /etc/caddy/sites/adeleai.org.caddy
+# It only matches these host names, so the other shop's site blocks are unaffected.
+adeleai.org, www.adeleai.org {
+	@www host www.adeleai.org
+	redir @www https://adeleai.org{uri} permanent
+
+	encode gzip
+	request_body {
+		max_size 256KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	# web.py listens only on localhost; WEB_PORT in /etc/adele/web.env must match.
+	reverse_proxy 127.0.0.1:8088
+	# No access log block on purpose: Caddy writes none unless one is configured, so no client IPs are stored.
+}

@@ -19,11 +19,14 @@ from urllib.request import Request, urlopen
 import discord
 from discord import ui
 
+import access
 import addresses
+import payment_config
+import shkeeper_api
 
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 SALES_CHANNEL_ID = int(os.environ["DISCORD_SALES_CHANNEL_ID"])
-LTC_XPUB = os.environ["LTC_XPUB"]
+LTC_XPUB = os.environ.get("LTC_XPUB", "")  # legacy LTC path, used only when Shkeeper is not configured
 DB = os.environ.get("DATABASE_PATH", "adeleai.sqlite3")
 PLANS = {"30": ("5", 30), "90": ("13", 90), "365": ("48", 365)}
 ORDER_TTL = 3600
@@ -52,6 +55,11 @@ def init_db():
             key TEXT PRIMARY KEY, days INTEGER NOT NULL, order_id TEXT,
             used_by INTEGER, used_at INTEGER)""")
         conn.execute("CREATE TABLE IF NOT EXISTS subscriptions (user_id INTEGER PRIMARY KEY, expires INTEGER NOT NULL)")
+    conn = db()
+    try:
+        access.init_db(conn)
+    finally:
+        conn.close()
 
 
 def ltc_eur_rate() -> Decimal:
@@ -102,8 +110,29 @@ INSTRUCTIONS = (
 )
 
 
+async def notify_shkeeper_orders(client: discord.Client):
+    # Shkeeper orders are marked paid and given a key by the web service's callback handler.
+    conn = db()
+    try:
+        rows = access.pending_notifications(conn, "discord_user")
+        for order_id, user_id, key, _ in rows:
+            try:
+                user = await client.fetch_user(user_id)
+                await user.send(INSTRUCTIONS.format(key=key, bot=TG_BOT))
+                access.mark_notified(conn, order_id)
+                log.info("order %s paid, key sent", order_id)
+            except Exception:
+                log.exception("could not DM key for order %s", order_id)
+    finally:
+        conn.close()
+
+
 async def settle_orders(client: discord.Client):
     while True:
+        try:
+            await notify_shkeeper_orders(client)
+        except Exception:
+            log.exception("shkeeper notify failed")
         try:
             with db() as conn:
                 rows = conn.execute(
@@ -141,6 +170,15 @@ class PlanSelect(ui.Select):
         ])
 
     async def callback(self, interaction: discord.Interaction):
+        coins = await asyncio.to_thread(shkeeper_api.available_coins)
+        if coins:
+            await interaction.response.send_message("Choose how you want to pay:", view=CoinView(self.values[0], coins),
+                                                    ephemeral=True)
+            return
+        if not LTC_XPUB:
+            await interaction.response.send_message("Payments are temporarily unavailable. Please try again later.",
+                                                    ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         order = await asyncio.to_thread(create_order, interaction.user.id, self.values[0])
         await interaction.followup.send(
@@ -150,6 +188,46 @@ class PlanSelect(ui.Select):
             "Only send Litecoin (LTC) to this address. The invoice expires in 60 minutes. "
             "Your key arrives by DM as soon as the payment is confirmed.",
             ephemeral=True)
+
+
+def create_shkeeper_order(discord_user: int, plan: str, coin: str) -> dict:
+    conn = db()
+    try:
+        return access.create_order(conn, "discord", plan, coin, discord_user=discord_user)
+    finally:
+        conn.close()
+
+
+class CoinSelect(ui.Select):
+    def __init__(self, plan: str, coins: list):
+        self.plan = plan
+        super().__init__(placeholder="Choose a coin", min_values=1, max_values=1, options=[
+            discord.SelectOption(label=payment_config.COIN_LABELS[c], value=c) for c in coins])
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            order = await asyncio.to_thread(create_shkeeper_order, interaction.user.id, self.plan, self.values[0])
+        except Exception:
+            log.exception("shkeeper order failed")
+            await interaction.followup.send("The payment service is not reachable right now. Please try again shortly.",
+                                            ephemeral=True)
+            return
+        coin = payment_config.COIN_LABELS[order["crypto"]]
+        await interaction.followup.send(
+            f"🧾 **Order {order['order_id']}**\n"
+            f"Plan: {order['days']} days · €{order['eur']}\n\n"
+            f"Send **{order['amount_crypto']}** {coin} to:\n`{order['address']}`\n\n"
+            f"Only send {coin} on this network. The amount is held for one hour. "
+            "Your key arrives by DM as soon as the payment is confirmed.\n"
+            f"Status page: {payment_config.PUBLIC_BASE_URL}/order/{order['token']}",
+            ephemeral=True)
+
+
+class CoinView(ui.View):
+    def __init__(self, plan: str, coins: list):
+        super().__init__(timeout=120)
+        self.add_item(CoinSelect(plan, coins))
 
 
 class PlanView(ui.View):

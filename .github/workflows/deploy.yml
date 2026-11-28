@@ -18,6 +18,7 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           APP_DIR: ${{ vars.DEPLOY_APP_DIR || '/opt/adele-bot' }}
           SERVICE: ${{ vars.DEPLOY_SERVICE || 'adele-bot' }}
+          EXTRA_SERVICES: ${{ vars.DEPLOY_EXTRA_SERVICES || '' }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
@@ -25,4 +26,4 @@ jobs:
           ssh-keyscan -T 10 -t ed25519 "$DEPLOY_HOST" > ~/.ssh/known_hosts 2>/dev/null
           [ -s ~/.ssh/known_hosts ] || { echo "No SSH host key received from the server (port 22 reachable?)"; exit 1; }
           ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" "APP_DIR='$APP_DIR' SERVICE='$SERVICE' '$APP_DIR/deploy/update.sh'"
+            "$DEPLOY_USER@$DEPLOY_HOST" "APP_DIR='$APP_DIR' SERVICE='$SERVICE' EXTRA_SERVICES='$EXTRA_SERVICES' '$APP_DIR/deploy/update.sh'"

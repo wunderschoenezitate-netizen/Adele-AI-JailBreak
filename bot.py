@@ -14,6 +14,10 @@ import json
 import socket
 from urllib.request import Request, urlopen
 
+import access
+import payment_config
+import shkeeper_api
+
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ["PRIVATE_CHANNEL_ID"]
 PUBLIC_CHANNEL = os.environ.get("PUBLIC_CHANNEL_ID", "")
@@ -99,15 +103,45 @@ def action(name, user, db):
     row = db.execute("SELECT expires FROM subscriptions WHERE user_id=?", (user,)).fetchone()
     active = bool(row and row[0] > time.time())
     if name == "buy":
-        send(user, "AdeleAI Private plans\n\n30 days — €5\n90 days — €13\n365 days — €48\n\nPay with USDT, ETH, BTC or LTC. Each purchase grants access for the selected period.", {
+        send(user, "AdeleAI Private plans\n\n30 days — €5\n90 days — €13\n365 days — €48\n\nPay with BTC, LTC, ETH, SOL or USDT. Each purchase grants access for the selected period.", {
             "inline_keyboard": [[{"text": "30 days · €5", "callback_data": "plan_30"}],
                                 [{"text": "90 days · €13", "callback_data": "plan_90"}],
                                 [{"text": "365 days · €48", "callback_data": "plan_365"}]]})
     elif name.startswith("plan_") and name[5:] in PLANS:
+        plan = name[5:]
+        coins = shkeeper_api.available_coins()
+        if not coins and not CRYPTO_TOKEN:
+            send(user, "Crypto payments are being set up. Please tap 🆘 Support to open a ticket.")
+            return
+        if not coins:
+            action("cb_" + plan, user, db)
+            return
+        price, days = PLANS[plan]
+        rows = [[{"text": payment_config.COIN_LABELS[c], "callback_data": f"pay_{plan}_{c}"}] for c in coins]
+        if CRYPTO_TOKEN:
+            rows.append([{"text": "Crypto Bot (Telegram wallet)", "callback_data": "cb_" + plan}])
+        send(user, f"{days} days · €{price}\n\nChoose how you want to pay:", {"inline_keyboard": rows})
+    elif name.startswith("pay_"):
+        parts = name.split("_", 2)
+        if len(parts) != 3 or parts[1] not in PLANS or parts[2] not in shkeeper_api.available_coins():
+            send(user, "This payment option is no longer available. Tap 💳 Subscription to start again.")
+            return
+        try:
+            order = access.create_order(db, "telegram", parts[1], parts[2], tg_user=user)
+        except Exception:
+            logging.exception("Shkeeper invoice failed for %s", user)
+            send(user, "The payment service is not reachable right now. Please try again in a few minutes.")
+            return
+        send(user, f"🧾 Order {order['order_id']}\n{order['days']} days · €{order['eur']}\n\n"
+                   f"Send exactly {order['amount_crypto']} {payment_config.COIN_LABELS[order['crypto']]} to:\n"
+                   f"{order['address']}\n\nOnly send this coin on this network. The amount is held for one hour. "
+                   "You get your invitation here as soon as the payment is confirmed.\n\n"
+                   f"Status: {payment_config.PUBLIC_BASE_URL}/order/{order['token']}")
+    elif name.startswith("cb_") and name[3:] in PLANS:
         if not CRYPTO_TOKEN:
             send(user, "Crypto payments are being set up. Please tap 🆘 Support to open a ticket.")
             return
-        price, days = PLANS[name[5:]]
+        price, days = PLANS[name[3:]]
         invoice = crypto_api("createInvoice", currency_type="fiat", fiat="EUR", amount=price,
                              accepted_assets="USDT,ETH,BTC,LTC", description=f"AdeleAI Private — {days} days",
                              payload=f"{user}:{days}", expires_in=3600)
@@ -247,21 +281,7 @@ KEY_RE = re.compile(r"ADL-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}")
 
 def redeem_key(user, key, db):
     """Return an error message, or None when the key was accepted."""
-    row = db.execute("SELECT days, used_by FROM keys WHERE key=?", (key,)).fetchone()
-    if not row:
-        return "❌ Key not found. Check the key and try again."
-    if row[1] is not None:
-        return "❌ This key was already used."
-    now = int(time.time())
-    with db:
-        cur = db.execute("UPDATE keys SET used_by=?, used_at=? WHERE key=? AND used_by IS NULL", (user, now, key))
-        if cur.rowcount != 1:
-            return "❌ This key was already used."
-        existing = db.execute("SELECT expires FROM subscriptions WHERE user_id=?", (user,)).fetchone()
-        expires = max(now, existing[0] if existing else 0) + row[0] * 86400
-        db.execute("INSERT INTO subscriptions VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET expires=excluded.expires",
-                   (user, expires))
-    return None
+    return access.redeem_key(db, user, key)
 
 
 def handle(update, db):
@@ -408,6 +428,18 @@ def handle(update, db):
         invite(user)
     elif message.get("text", "").split(" ")[0].split("@")[0] == "/start":
         parts = message.get("text", "").split(maxsplit=1)
+        if len(parts) == 2 and parts[1].startswith("key_") and KEY_RE.fullmatch(parts[1][4:].upper()):
+            # Deep link from the website or a Discord DM: t.me/<bot>?start=key_ADL-XXXX-XXXX-XXXX
+            db.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, NULL)", (user,))
+            db.commit()
+            error = redeem_key(user, parts[1][4:].upper(), db)
+            if error:
+                send(user, error)
+            else:
+                send(user, "✅ Key accepted. Your access is active.")
+                invite(user)
+            menu(user)
+            return
         referrer = None
         if len(parts) == 2 and parts[1].startswith("ref_") and parts[1][4:].isdigit():
             candidate = int(parts[1][4:])
@@ -465,6 +497,18 @@ def check_crypto_payments(db):
             logging.exception("Could not send invite for invoice %s; user can use My status", invoice_id)
 
 
+def notify_shkeeper_payments(db):
+    # Orders paid through Shkeeper are granted by the web service's callback handler; the invite is sent here
+    # because this is the only process that talks to Telegram for the bot token.
+    for order_id, user, _, days in access.pending_notifications(db, "tg_user"):
+        try:
+            send(user, f"✅ Payment for order {order_id} confirmed: {days} days added.")
+            invite(user)
+            access.mark_notified(db, order_id)
+        except Exception:
+            logging.exception("Could not notify %s about order %s", user, order_id)
+
+
 def connect():
     # One connection per thread. WAL lets the background checks and the handlers write without blocking each other.
     db = sqlite3.connect(DB, timeout=10)
@@ -478,6 +522,7 @@ def background(interval=30):
         try:
             expire_members(db)
             check_crypto_payments(db)
+            notify_shkeeper_payments(db)
         except Exception:
             logging.exception("Background check failed")
         time.sleep(interval)
@@ -506,6 +551,7 @@ def main():
     db.execute("CREATE TABLE IF NOT EXISTS admin_post_mode (user_id INTEGER PRIMARY KEY)")
     db.execute("CREATE TABLE IF NOT EXISTS keys (key TEXT PRIMARY KEY, days INTEGER NOT NULL, order_id TEXT, used_by INTEGER, used_at INTEGER)")
     db.commit()
+    access.init_db(db)
     while True:
         try:
             admins = api("getChatAdministrators", chat_id=CHANNEL)
