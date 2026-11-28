@@ -197,7 +197,7 @@ class WebCallbackTests(unittest.TestCase):
 
     def test_pages_render(self):
         conn = HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
-        for path, expected in (("/impressum", 200), ("/datenschutz", 200), ("/order/" + "x" * 32, 404),
+        for path, expected in (("/impressum", 404), ("/datenschutz", 404), ("/order/" + "x" * 32, 404),
                                ("/order/" + self.order["token"], 200), ("/healthz", 200)):
             conn.request("GET", path)
             response = conn.getresponse()

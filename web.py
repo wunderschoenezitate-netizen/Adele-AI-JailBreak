@@ -1,4 +1,4 @@
-"""Website for adeleai.org: plans, crypto checkout through Shkeeper, order status, legal pages, Shkeeper callback.
+"""Website for adeleai.org: plans, crypto checkout through Shkeeper, order status, Shkeeper callback.
 
 Runs behind Caddy on 127.0.0.1:WEB_PORT. Only the standard library is used, like bot.py.
 """
@@ -84,8 +84,7 @@ def page(title, body, refresh=None):
 <header><a class="brand" href="/">Adele<span>AI</span> Private</a>
 <a href="https://t.me/{html.escape(TG_BOT)}">Telegram bot</a></header>
 {body}
-<footer><a href="/impressum">Impressum</a><a href="/datenschutz">Datenschutz</a>
-<span>Payments are processed in crypto through our own payment server.</span></footer>
+<footer><span>Payments are processed in crypto through our own payment server.</span></footer>
 </main></body></html>""".encode("utf-8")
 
 
@@ -156,21 +155,6 @@ def order_page(order):
     return page(f"Order {order['order_id']}", head + body, refresh=20)
 
 
-LEGAL_NOTICE = ('<p class="notice">Placeholder. This text must be completed and checked by a lawyer before the site '
-                'goes live.</p>')
-IMPRESSUM = page("Impressum", f"""<h1>Impressum</h1>{LEGAL_NOTICE}
-<p>Angaben gemäß § 5 DDG</p><p>[Name / Firma]<br>[Straße Hausnummer]<br>[PLZ Ort]<br>[Land]</p>
-<p>Kontakt: [E-Mail-Adresse]</p><p>Verantwortlich für den Inhalt: [Name, Anschrift]</p>""")
-DATENSCHUTZ = page("Datenschutz", f"""<h1>Datenschutzerklärung</h1>{LEGAL_NOTICE}
-<h3>Verantwortlicher</h3><p>[Name, Anschrift, E-Mail]</p>
-<h3>Welche Daten verarbeitet werden</h3><p>[Bestelldaten: Bestellnummer, gewählter Plan, Coin, Zahlungsadresse,
-Zahlungsstatus; Telegram- bzw. Discord-Nutzer-ID bei Käufen über die Bots; IP-Adresse kurzzeitig für
-Missbrauchsschutz; Server-Logs des Webservers.]</p>
-<h3>Zahlungsabwicklung</h3><p>[Selbst betriebener Shkeeper-Server; Blockchain-Transaktionen sind öffentlich.
-Angeben, welche externen Node- oder RPC-Anbieter genutzt werden.]</p>
-<h3>Speicherdauer, Rechte, Beschwerderecht</h3><p>[Ergänzen]</p>""")
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = "AdeleAI"
     sys_version = ""
@@ -213,10 +197,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_body(200, landing())
         elif path == "/healthz":
             self.send_body(200, b"ok", "text/plain")
-        elif path == "/impressum":
-            self.send_body(200, IMPRESSUM)
-        elif path == "/datenschutz":
-            self.send_body(200, DATENSCHUTZ)
         elif path.startswith("/order/"):
             db = access.connect(DB)
             try:
