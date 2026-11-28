@@ -41,6 +41,10 @@ SHKEEPER_URL = os.environ.get("SHKEEPER_URL", "").rstrip("/")      # e.g. https:
 SHKEEPER_API_KEYS = [k.strip() for k in os.environ.get("SHKEEPER_API_KEY", "").split(",") if k.strip()]
 SHKEEPER_API_KEY = SHKEEPER_API_KEYS[0] if SHKEEPER_API_KEYS else ""
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://adeleai.org").rstrip("/")
+# Affiliate reward: every REFERRAL_INVITES subscribed members who joined through a user's referral link give that
+# user REFERRAL_REWARD_DAYS days of free access.
+REFERRAL_INVITES = max(1, int(os.environ.get("REFERRAL_INVITES", "10")))
+REFERRAL_REWARD_DAYS = max(1, int(os.environ.get("REFERRAL_REWARD_DAYS", "7")))
 CALLBACK_PATH = "/shkeeper/callback"
 CALLBACK_MAX_AGE = 300
 

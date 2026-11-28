@@ -41,6 +41,13 @@ def init_db(db):
         created INTEGER NOT NULL, expires INTEGER NOT NULL, paid_at INTEGER, key TEXT,
         notified INTEGER NOT NULL DEFAULT 0, last_callback TEXT)""")
     db.execute("CREATE INDEX IF NOT EXISTS orders_notify ON orders (status, notified)")
+    # users has the same columns bot.py creates; referral_* tables belong to the affiliate reward.
+    db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, referrer_id INTEGER)")
+    db.execute("CREATE TABLE IF NOT EXISTS referral_qualified (user_id INTEGER PRIMARY KEY, referrer_id INTEGER NOT NULL, at INTEGER NOT NULL)")
+    db.execute("CREATE INDEX IF NOT EXISTS referral_qualified_referrer ON referral_qualified (referrer_id)")
+    db.execute("""CREATE TABLE IF NOT EXISTS referral_rewards (
+        referrer_id INTEGER NOT NULL, unit INTEGER NOT NULL, days INTEGER NOT NULL, created INTEGER NOT NULL,
+        notified INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (referrer_id, unit))""")
     db.commit()
 
 
@@ -177,6 +184,7 @@ def fulfil(db, order_id, now=None):
         tg_user, days = db.execute("SELECT tg_user, days FROM orders WHERE order_id=?", (order_id,)).fetchone()
         if tg_user is not None:
             extend_subscription(db, tg_user, days, now)
+            referral_qualify(db, tg_user, now)
         else:
             key = new_key()
             db.execute("INSERT INTO keys (key, days, order_id) VALUES (?, ?, ?)", (key, days, order_id))
@@ -197,6 +205,7 @@ def redeem_key(db, user, key, now=None):
         if cur.rowcount != 1:
             return "❌ This key was already used."
         extend_subscription(db, user, row[0], now)
+        referral_qualify(db, user, now)
     return None
 
 
@@ -211,3 +220,46 @@ def pending_notifications(db, channel_column):
 def mark_notified(db, order_id):
     with db:
         db.execute("UPDATE orders SET notified=1 WHERE order_id=?", (order_id,))
+
+
+def referral_qualify(db, user, now=None):
+    """Count `user` as a subscribed member of their referrer and grant free days for each full group of members.
+
+    Call it inside the transaction that grants the user's subscription through a purchase or a redeemed key (not for
+    reward days). A user counts once, and each reward step (referrer, unit) is inserted once, so repeated or
+    concurrent calls never grant twice. Returns the number of reward steps granted now.
+    """
+    now = int(time.time()) if now is None else now
+    row = db.execute("SELECT referrer_id FROM users WHERE user_id=?", (user,)).fetchone()
+    referrer = row[0] if row else None
+    if referrer is None or referrer == user:
+        return 0
+    cur = db.execute("INSERT OR IGNORE INTO referral_qualified (user_id, referrer_id, at) VALUES (?, ?, ?)",
+                     (user, referrer, now))
+    if cur.rowcount != 1:
+        return 0
+    qualified = db.execute("SELECT COUNT(*) FROM referral_qualified WHERE referrer_id=?", (referrer,)).fetchone()[0]
+    granted = 0
+    for unit in range(1, qualified // cfg.REFERRAL_INVITES + 1):
+        cur = db.execute("INSERT OR IGNORE INTO referral_rewards (referrer_id, unit, days, created) VALUES (?, ?, ?, ?)",
+                         (referrer, unit, cfg.REFERRAL_REWARD_DAYS, now))
+        if cur.rowcount == 1:
+            extend_subscription(db, referrer, cfg.REFERRAL_REWARD_DAYS, now)
+            granted += 1
+    return granted
+
+
+def referral_stats(db, user):
+    """(people who started the bot through the link, subscribed members through the link)"""
+    started = db.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (user,)).fetchone()[0]
+    subscribed = db.execute("SELECT COUNT(*) FROM referral_qualified WHERE referrer_id=?", (user,)).fetchone()[0]
+    return started, subscribed
+
+
+def pending_referral_rewards(db):
+    return db.execute("SELECT referrer_id, unit, days FROM referral_rewards WHERE notified=0").fetchall()
+
+
+def mark_referral_notified(db, referrer, unit):
+    with db:
+        db.execute("UPDATE referral_rewards SET notified=1 WHERE referrer_id=? AND unit=?", (referrer, unit))
