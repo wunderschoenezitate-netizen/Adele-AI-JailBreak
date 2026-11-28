@@ -10,6 +10,8 @@ shkeeper/services/webhook_hmac.py, shkeeper/modules/cryptos/*.py):
     JSON {external_id, fiat, amount, callback_url}. Errors come back as HTTP 200 with status "error".
   - Success response fields: amount (crypto), wallet (address), exchange_rate, recalculate_after, display_name.
   - Coin list: GET {base}/api/v1/crypto (no auth), use crypto_list[].name.
+  - Every wallet has its own api key (shkeeper/models.py Wallet.apikey); api_key_required accepts any wallet's key,
+    and callbacks are signed with the key of the crypto's wallet (shkeeper/callback.py).
   - Callback signature: hex HMAC-SHA256(api_key, "{X-Shkeeper-Timestamp}." + raw body), header X-Shkeeper-Signature,
     recommended max age 300 s. Only HTTP 202 stops the 60 s resend loop.
   - Callback kinds: an "unconfirmed" notice {status: "unconfirmed", external_id, crypto, addr, txid, amount},
@@ -34,7 +36,10 @@ PLANS = {"30": ("5", 30), "90": ("13", 90), "365": ("48", 365)}
 FIAT = "EUR"
 
 SHKEEPER_URL = os.environ.get("SHKEEPER_URL", "").rstrip("/")      # e.g. https://pay.adeleai.org
-SHKEEPER_API_KEY = os.environ.get("SHKEEPER_API_KEY", "")           # also the webhook HMAC secret
+# One key, or several separated by commas (each Shkeeper wallet has its own key and signs its callbacks with it).
+# The first key authenticates API calls (Shkeeper accepts any wallet key); all keys are accepted for callbacks.
+SHKEEPER_API_KEYS = [k.strip() for k in os.environ.get("SHKEEPER_API_KEY", "").split(",") if k.strip()]
+SHKEEPER_API_KEY = SHKEEPER_API_KEYS[0] if SHKEEPER_API_KEYS else ""
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://adeleai.org").rstrip("/")
 CALLBACK_PATH = "/shkeeper/callback"
 CALLBACK_MAX_AGE = 300

@@ -54,6 +54,12 @@ class SignatureTests(unittest.TestCase):
         self.assertTrue(shkeeper_api.verify_signature("test-api-key", VECTOR_BODY, VECTOR_TS, VECTOR_SIG,
                                                       now=int(VECTOR_TS) + 10))
 
+    def test_any_of_several_wallet_keys(self):
+        now = int(VECTOR_TS)
+        self.assertTrue(shkeeper_api.verify_any(["other-wallet-key", "test-api-key"], VECTOR_BODY, VECTOR_TS, VECTOR_SIG, now=now))
+        self.assertFalse(shkeeper_api.verify_any(["a", "b"], VECTOR_BODY, VECTOR_TS, VECTOR_SIG, now=now))
+        self.assertFalse(shkeeper_api.verify_any([], VECTOR_BODY, VECTOR_TS, VECTOR_SIG, now=now))
+
     def test_rejects_tampered_body_wrong_key_old_and_malformed(self):
         now = int(VECTOR_TS)
         self.assertFalse(shkeeper_api.verify_signature("test-api-key", VECTOR_BODY + b" ", VECTOR_TS, VECTOR_SIG, now=now))
@@ -159,7 +165,8 @@ class WebCallbackTests(unittest.TestCase):
         import web
         cls.web = web
         web.DB = os.environ["DATABASE_PATH"]
-        cfg.SHKEEPER_API_KEY = "test-api-key"
+        cfg.SHKEEPER_API_KEYS = ["btc-key-unrelated", "test-api-key"]
+        cfg.SHKEEPER_API_KEY = cfg.SHKEEPER_API_KEYS[0]
         db = access.connect(web.DB)
         access.init_db(db)
         cls.order = access.create_order(db, "web", "90", "BTC", invoice=fake_invoice)
