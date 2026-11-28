@@ -363,6 +363,11 @@ def handle(update, db):
         return
     is_post_command = text.startswith("/") and not text.startswith(("/public ", "/private "))
     in_post_mode = db.execute("SELECT 1 FROM admin_post_mode WHERE user_id=?", (user,)).fetchone()
+    if user == admin_id:
+        # Route diagnostics for the admin only; logs message kinds, never content.
+        logging.info("Admin message %s: kinds=%s post_mode=%s reply=%s command=%s", message.get("message_id"),
+                     sorted(k for k in message if k not in ("from", "chat", "date", "message_id")),
+                     bool(in_post_mode), bool(message.get("reply_to_message")), is_post_command)
     if user == admin_id and in_post_mode and not message.get("reply_to_message") and not is_post_command and (text or has_media(message)):
         # Default target is the public jailbreak channel. Start a text or caption with "/private " for the private channel.
         media = has_media(message)
@@ -401,6 +406,7 @@ def handle(update, db):
                     **({"message_thread_id": thread} if thread else {}))
             db.execute("DELETE FROM admin_post_mode WHERE user_id=?", (user,))
             db.commit()
+            logging.info("Admin post %s copied to %s", message.get("message_id"), name)
             send(user, f"✅ Posted to the {name}.")
         except Exception:
             logging.exception("Channel post failed")
@@ -470,6 +476,8 @@ def handle(update, db):
         selected = MENU_CHOICES.get(message.get("text"))
         if selected:
             action(selected, user, db)
+        elif user == admin_id:
+            logging.info("Admin message %s matched no handler", message.get("message_id"))
 
 
 def expire_members(db):
